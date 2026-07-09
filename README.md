@@ -81,7 +81,7 @@ The ML router is pre-trained, frozen at submission time, and adds **<5ms** of ov
 │  │  Hardcoded Feature          │  │  LLM-based Feature        │ │
 │  │  Extractor (Pure Python)    │  │  Extractor (≤0.6B local   │ │
 │  │                             │  │  model, zero Fireworks    │ │
-│  │  - prompt token count       │  │  tokens)                  │ │
+│  │  - prompt_count             │  │  tokens)                  │ │
 │  │  - has_code_block           │  │                           │ │
 │  │  - has_math_symbols         │  │  - reasoning_depth (1–5)  │ │
 │  │  - question_type            │  │  - domain classification  │ │
