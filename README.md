@@ -571,12 +571,104 @@ python evaluator/run_eval.py \
 
 ---
 
+## Ownership & Responsibilities
+
+The project is split into two clearly owned tracks that merge at the routing layer.
+
+### 🧠 Devansh Jhawar — ML Routing Engine & Model Evaluation
+
+**Owns:**
+- The entire **ML-based routing engine** — training, evaluation, and optimization
+- **Hardcoded feature extraction** — pure Python prompt analysis pipeline
+- **Router model training** — XGBoost/LightGBM classifier, threshold tuning, model artifacts
+- **Data Builder pipeline** — benchmark sweep, response labeling, dataset generation
+- **Accuracy evaluators** — math, code, science, and general task-specific evaluators
+- **Model evaluation & scoring** — validating router accuracy against the hackathon scoring formula
+
+**Key deliverables:**
+- `data_builder/` — complete dataset generation pipeline
+- `router/train.py`, `router/evaluate.py`, `router/tune_thresholds.py`
+- `router/artifacts/router_model.pkl` — the pre-trained routing brain
+- `evaluator/` — all accuracy evaluation scripts
+- `feature_extractor/hardcoded_features.py`
+
+---
+
+### ⚙️ Badal Patel — Tiny Feature Agent & Full Runtime
+
+**Owns:**
+- The **sub-0.6B LLM-based feature extraction agent** — the tiny local model that enriches prompt feature vectors with nuanced signals (reasoning depth, domain, ambiguity, etc.)
+- The **complete runtime** — wiring together the full end-to-end app flow that judges and users interact with
+- **Model client integrations** — Ollama local model client + all 3 Fireworks remote tier clients
+- **Runtime orchestration** — ensuring the pipeline runs cleanly from user input to final answer
+
+**Key deliverables:**
+- `feature_extractor/llm_features.py` — sub-0.6B agent feature extraction
+- `inference_wrapper/router_wrapper.py` — main runtime orchestration
+- `inference_wrapper/model_clients.py` — all model clients (local + 3 remote tiers)
+- `inference_wrapper/feature_pipeline.py` — unified feature pipeline wiring
+- `Dockerfile` — containerized runtime for the scoring environment
+
+---
+
+### 🔄 Runtime Flow (Badal's Ownership)
+
+The runtime is the interface between the user and the routing system — this is what the judges interact with:
+
+```
+User Prompt
+     │
+     ▼
+┌────────────────────────────────────────────┐
+│           FEATURE EXTRACTION LAYER         │
+│                                            │
+│  [Hardcoded Extractor]  +  [LLM Agent]     │
+│   Pure Python rules        Sub-0.6B local  │
+│   (Devansh)                model           │
+│                            (Badal)         │
+└──────────────────────┬─────────────────────┘
+                       │ Feature Vector
+                       ▼
+┌────────────────────────────────────────────┐
+│             ROUTING ENGINE                 │
+│         ML Router (XGBoost)                │
+│         (Trained by Devansh)               │
+│                                            │
+│  Output: confidence score + tier decision  │
+└──────────────────────┬─────────────────────┘
+                       │
+          ┌────────────┼──────────────────────┐
+          ▼            ▼            ▼          ▼
+    ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+    │  LOCAL   │ │  TIER 1  │ │  TIER 2  │ │  TIER 3  │
+    │  MODEL   │ │  (Low)   │ │  (Mid)   │ │  (High)  │
+    │  Ollama  │ │ llama-8b │ │llama-70b │ │deepseek  │
+    │ 0 tokens │ │low cost  │ │med cost  │ │high cost │
+    └──────────┘ └──────────┘ └──────────┘ └──────────┘
+         ▲              ▲            ▲            ▲
+         └──────────────┴────────────┴────────────┘
+                  (All clients owned by Badal)
+```
+
+### 📦 Model Stack
+
+| Tier | Type | Model | Fireworks Tokens | Owner |
+|------|------|-------|-----------------|-------|
+| 🏠 **Local** | Local (Ollama) | Llama 3.2 3B / Qwen2.5 3B | **0** | Badal |
+| 🟢 **Tier 1 — Low** | Remote (Fireworks) | `llama-v3p1-8b-instruct` | Low | Badal |
+| 🟡 **Tier 2 — Mid** | Remote (Fireworks) | `llama-v3p1-70b-instruct` | Medium | Badal |
+| 🔴 **Tier 3 — High** | Remote (Fireworks) | `deepseek-r1` or equivalent | High | Badal |
+
+> **Note:** Exact Fireworks model names will be confirmed once the hackathon model list is finalized.
+
+---
+
 ## Team
 
-| Member | Role |
-|--------|------|
-| Devansh | Architecture, ML Router, Data Builder Pipeline |
-| [Partner Name] | TBD — Prompt Collection Strategy, Evaluators |
+| Member | Primary Ownership |
+|--------|------------------|
+| **Devansh Jhawar** | ML Routing Engine · Feature Extraction (hardcoded) · Router Training · Model Evaluation & Data Builder |
+| **Badal Patel** | Sub-0.6B Feature Agent · Full Runtime · Model Clients (Local + 3 Remote Tiers) · App Orchestration |
 
 **Hackathon:** AMD Developer Hackathon ACT III 2026
 **Track:** Track 1 — Hybrid Token-Efficient Routing Agent
