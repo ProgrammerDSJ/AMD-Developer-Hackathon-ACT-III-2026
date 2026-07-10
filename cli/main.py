@@ -1,4 +1,4 @@
-﻿"""
+"""
 cli/main.py  --  HybridRouter Unified Interactive CLI
 ------------------------------------------------------
 Usage:
@@ -32,6 +32,7 @@ from rich.markup   import escape
 
 from inference_wrapper.feature_extractor import extract_features
 from inference_wrapper.router_core       import predict
+from inference_wrapper.simplicity_gate   import is_trivially_simple
 from inference_wrapper.local_client      import detect_ollama, score_model, generate as local_gen
 from inference_wrapper.fireworks_client  import call_tier, TIER_DISPLAY
 
@@ -290,122 +291,113 @@ def route_prompt(prompt: str, active_model: str | None,
         border_style="white", padding=(0, 1)
     ))
 
-    # --- Step 1: Feature Extraction ---
-    CONSOLE.print(Rule("[bold blue]Step 1  Feature Extraction[/bold blue]", style="blue"))
-    t0     = time.time()
-    feats  = extract_features(prompt)
-    fms    = (time.time() - t0) * 1000
+    # =========================================================================
+    # STEP 1: Gate 0 -- Simplicity Pre-Filter
+    # =========================================================================
+    CONSOLE.print(Rule("[bold green]Step 1  Gate 0 -- Simplicity Pre-Filter[/bold green]", style="green"))
+    t0 = time.time()
+    is_simple, gate_reason, gate_conf = is_trivially_simple(prompt)
+    gms = (time.time() - t0) * 1000
 
-    ft = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
-    ft.add_column("Feature", style="dim", width=28)
-    ft.add_column("Value",   width=12)
-    ft.add_column("Feature", style="dim", width=28)
-    ft.add_column("Value",   width=12)
-    items = [
-        ("task_type",        feats["_task_type"]),
-        ("prompt_length",    feats["prompt_length"]),
-        ("has_code_block",   feats["has_code_block"]),
-        ("has_math_symbols", feats["has_math_symbols"]),
-        ("reasoning_depth",  feats["llm_reasoning_depth"]),
-        ("complexity",       feats["complexity_heuristic"]),
-        ("requires_factual", feats["llm_requires_factual_recall"]),
-        ("ambiguity_score",  feats["llm_ambiguity_score"]),
-        ("num_sentences",    feats["num_sentences"]),
-        ("avg_word_len",     feats["avg_word_length"]),
-    ]
-    for i in range(0, len(items), 2):
-        k1, v1 = items[i]
-        k2, v2 = items[i+1] if i+1 < len(items) else ("", "")
-        ft.add_row(k1, str(v1), k2, str(v2))
-    CONSOLE.print(ft)
-    CONSOLE.print(f"  [dim]Extracted in {fms:.1f}ms  |  "
-                  f"task=[cyan]{feats['_task_type']}[/cyan]  "
-                  f"q_type=[cyan]{feats['_q_type']}[/cyan][/dim]")
+    has_local = bool(active_model and cfg.get("models", {}).get(active_model))
 
-    # --- Step 2: Router Prediction ---
-    CONSOLE.print(Rule("[bold magenta]Step 2  Router Decision[/bold magenta]", style="magenta"))
-    t0   = time.time()
-    tier, t1p, t2p = predict(feats)
-    rms  = (time.time() - t0) * 1000
-
-    bar_width = 30
-    p1b = "#" * int(t1p * bar_width) + "-" * (bar_width - int(t1p * bar_width))
-    p2b = "#" * int(t2p * bar_width) + "-" * (bar_width - int(t2p * bar_width))
-    CONSOLE.print(f"  [green]Tier1 (easy)  [{p1b}] {t1p:.3f}[/green]")
-    CONSOLE.print(f"  [red]  Tier2 (hard) [{p2b}] {t2p:.3f}[/red]")
-    CONSOLE.print(f"  [dim]Router latency: {rms:.1f}ms[/dim]")
-
-    # --- Step 3: Local Gate ---
-    CONSOLE.print(Rule("[bold yellow]Step 3  Local Gate[/bold yellow]", style="yellow"))
-
-    model_cfg   = cfg.get("models", {}).get(active_model, {}) if active_model else {}
-    threshold   = model_cfg.get("local_threshold", 1.0) if model_cfg else 1.0
-    cal_acc     = model_cfg.get("calibration_acc", 0.0) if model_cfg else 0.0
-    use_local   = bool(active_model and model_cfg and t1p >= threshold)
-
+    # Build Gate 0 display
     gt = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
-    gt.add_column("Label", style="dim", width=24)
-    gt.add_column("Value", width=44)
-    gt.add_row("Local model",      f"[cyan]{active_model or 'None'}[/cyan]")
-    gt.add_row("Calibration acc",  f"{cal_acc*100:.1f}%" if active_model else "n/a")
-    gt.add_row("Local threshold",  str(threshold) if active_model else "n/a")
-    gt.add_row("Router tier1_prob", f"[bold]{t1p:.3f}[/bold]")
-    if use_local:
-        cond = f"[bold green]PASS  ({t1p:.3f} >= {threshold}) -> LOCAL[/bold green]"
-    elif not active_model:
-        cond = "[dim]No local model configured[/dim]"
-    else:
-        cond = f"[bold red]FAIL  ({t1p:.3f} < {threshold}) -> REMOTE[/bold red]"
-    gt.add_row("Gate condition",   cond)
+    gt.add_column("Label", style="dim", width=22)
+    gt.add_column("Value", width=50)
+    gt.add_row("Simplicity score", f"[bold]{gate_conf:.2f}[/bold]  (>= 0.70 = simple)")
+    gt.add_row("Decision",        gate_reason)
+    gt.add_row("Local model",     f"[cyan]{active_model or 'None'}[/cyan]")
+    gt.add_row("Gate latency",    f"{gms:.2f}ms")
     CONSOLE.print(gt)
 
-    # Decision box
-    if use_local:
+    dest         = "local"
+    tokens_used  = 0
+    tokens_saved = 0
+    response     = ""
+
+    if is_simple and has_local:
+        # ── Simple prompt + local model available: route directly to local ──
         CONSOLE.print(Panel(
-            f"[bold green]ROUTED TO: LOCAL  ({active_model})[/bold green]\n"
-            f"[green]Fireworks tokens: 0[/green]",
+            f"[bold green]Gate 0: SIMPLE -> LOCAL  ({active_model})[/bold green]\n"
+            f"[dim]Bypassing ML router. 0 Fireworks tokens.[/dim]",
             border_style="green", padding=(0, 2)
         ))
-    elif tier == "tier1":
-        CONSOLE.print(Panel(
-            "[bold cyan]ROUTED TO: TIER 1 REMOTE  (gpt-oss-20b)[/bold cyan]\n"
-            "[dim]Local gate failed. Using cheap Fireworks model.[/dim]",
-            border_style="cyan", padding=(0, 2)
-        ))
-    else:
-        CONSOLE.print(Panel(
-            "[bold yellow]ROUTED TO: TIER 2 REMOTE  (glm-5p2)[/bold yellow]\n"
-            "[dim]Complex prompt. Using powerful Fireworks model.[/dim]",
-            border_style="yellow", padding=(0, 2)
-        ))
-
-    # --- Step 4: Inference ---
-    CONSOLE.print(Rule("[bold white]Step 4  Inference[/bold white]", style="white"))
-    tokens_used, tokens_baseline = 0, 0
-    dest = "local"
-
-    if use_local:
+        CONSOLE.print(Rule("[bold white]Inference  (Local)[/bold white]", style="green"))
         CONSOLE.print(f"  [green]Calling Ollama ({active_model})...[/green]", end="")
         response, latency = local_gen(prompt, active_model)
-        tokens_baseline = max(len(response.split()) * 3, 200)
+        tokens_baseline   = max(len(response.split()) * 3, 150)
+        tokens_saved      = tokens_baseline
         CONSOLE.print(f"  done in {latency:.2f}s")
-
-    elif tier == "tier1":
-        dest = "tier1"
-        CONSOLE.print(f"  [cyan]Calling Fireworks Tier 1 (gpt-oss-20b)...[/cyan]", end="")
-        response, tokens_used, latency = call_tier("tier1", prompt)
-        tokens_baseline = max(int(tokens_used * 2.8), tokens_used + 200)
-        CONSOLE.print(f"  done in {latency:.2f}s  [{tokens_used} tokens]")
+        dest = "local"
 
     else:
-        dest = "tier2"
-        CONSOLE.print(f"  [yellow]Calling Fireworks Tier 2 (glm-5p2)...[/yellow]", end="")
-        response, tokens_used, latency = call_tier("tier2", prompt)
-        tokens_baseline = tokens_used
-        CONSOLE.print(f"  done in {latency:.2f}s  [{tokens_used} tokens]")
+        # ── Not simple (or no local model): ML router decides tier1 vs tier2 ──
+        if is_simple and not has_local:
+            CONSOLE.print(Panel(
+                "[yellow]Gate 0: SIMPLE but no local model calibrated -> REMOTE[/yellow]\n"
+                "[dim]Run --recalibrate to enable local routing.[/dim]",
+                border_style="yellow", padding=(0, 2)
+            ))
+        else:
+            CONSOLE.print(Panel(
+                "[cyan]Gate 0: NOT SIMPLE -> ML Router[/cyan]\n"
+                "[dim]Prompt requires remote model intelligence.[/dim]",
+                border_style="cyan", padding=(0, 2)
+            ))
 
-    tokens_saved = max(tokens_baseline - tokens_used, 0)
-    total_ms     = (time.time() - t_start) * 1000
+        # =================================================================
+        # STEP 2: ML Router -- tier1 vs tier2
+        # =================================================================
+        CONSOLE.print(Rule("[bold magenta]Step 2  ML Router -- Tier Decision[/bold magenta]", style="magenta"))
+        t0   = time.time()
+        feats = extract_features(prompt)
+        tier, t1p, t2p = predict(feats)
+        rms  = (time.time() - t0) * 1000
+
+        bar_width = 30
+        p1b = "#" * int(t1p * bar_width) + "-" * (bar_width - int(t1p * bar_width))
+        p2b = "#" * int(t2p * bar_width) + "-" * (bar_width - int(t2p * bar_width))
+        CONSOLE.print(f"  [green]Tier1 gpt-oss-20b  [{p1b}] {t1p:.3f}[/green]")
+        CONSOLE.print(f"  [yellow]  Tier2 glm-5p2     [{p2b}] {t2p:.3f}[/yellow]")
+        CONSOLE.print(f"  [dim]Features: task={feats['_task_type']}  "
+                      f"complexity={feats['complexity_heuristic']}  "
+                      f"depth={feats['llm_reasoning_depth']}  "
+                      f"Router latency: {rms:.1f}ms[/dim]")
+
+        if tier == "tier1":
+            CONSOLE.print(Panel(
+                "[bold cyan]Router: TIER 1  (gpt-oss-20b)[/bold cyan]\n"
+                "[dim]Moderate complexity -- cheap fast model.[/dim]",
+                border_style="cyan", padding=(0, 2)
+            ))
+            dest = "tier1"
+        else:
+            CONSOLE.print(Panel(
+                "[bold yellow]Router: TIER 2  (glm-5p2)[/bold yellow]\n"
+                "[dim]High complexity -- powerful model required.[/dim]",
+                border_style="yellow", padding=(0, 2)
+            ))
+            dest = "tier2"
+
+        # =================================================================
+        # STEP 3: Remote Inference
+        # =================================================================
+        CONSOLE.print(Rule("[bold white]Step 3  Inference  (Remote)[/bold white]", style="white"))
+        if dest == "tier1":
+            CONSOLE.print(f"  [cyan]Calling Fireworks Tier 1 (gpt-oss-20b)...[/cyan]", end="")
+            response, tokens_used, latency = call_tier("tier1", prompt)
+            tokens_baseline = max(int(tokens_used * 2.8), tokens_used + 200)
+            CONSOLE.print(f"  done in {latency:.2f}s  [{tokens_used} tokens]")
+        else:
+            CONSOLE.print(f"  [yellow]Calling Fireworks Tier 2 (glm-5p2)...[/yellow]", end="")
+            response, tokens_used, latency = call_tier("tier2", prompt)
+            tokens_baseline = tokens_used
+            CONSOLE.print(f"  done in {latency:.2f}s  [{tokens_used} tokens]")
+
+        tokens_saved = max(tokens_baseline - tokens_used, 0)
+
+    total_ms = (time.time() - t_start) * 1000
 
     # --- Response ---
     CONSOLE.print(Rule("[bold white]Response[/bold white]", style="white"))
@@ -422,9 +414,11 @@ def route_prompt(prompt: str, active_model: str | None,
     dest_label = (f"Local  ({active_model})" if dest == "local"
                   else "Tier 1  gpt-oss-20b" if dest == "tier1"
                   else "Tier 2  glm-5p2")
+    gate_label = "Gate 0 (simple)" if dest == "local" else "ML Router"
+    st.add_row("Decision by",      gate_label)
     st.add_row("Routed to",        f"[{color}]{dest_label}[/{color}]")
     st.add_row("Fireworks tokens", f"[bold]{tokens_used}[/bold]")
-    st.add_row("Tokens saved",     f"[bold green]+{tokens_saved}[/bold green]  vs always-tier2 baseline")
+    st.add_row("Tokens saved",     f"[bold green]+{tokens_saved}[/bold green]  vs remote baseline")
     st.add_row("Total latency",    f"{total_ms:.0f}ms")
     CONSOLE.print(st)
 
