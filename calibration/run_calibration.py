@@ -118,8 +118,12 @@ def _score(response: str, reference: str, evaluator: str) -> bool:
         return bool(got) and got == exp
     elif evaluator == "math":
         got, exp = _extract_number(r), _extract_number(reference)
-        try:    return got and exp and abs(float(got) - float(exp)) < 0.02
-        except: return got == exp
+        try:
+            # Explicitly wrap in bool() — Python's 'and' returns the last evaluated
+            # operand, not True/False, so "" and exp returns "" not False.
+            return bool(got and exp and abs(float(got) - float(exp)) < 0.02)
+        except Exception:
+            return bool(got == exp)
     elif evaluator == "code":
         return "def " in r or "return " in r or "print(" in r
     return False
@@ -148,12 +152,12 @@ def calibrate_model(model_name: str, prompts: list) -> dict:
         for i, p in enumerate(prompts):
             src = p["source"]
             resp, _ = generate(p["prompt"], model_name, max_tokens=128)
-            ok = _score(resp, p["reference"], p["evaluator"])
+            ok = bool(_score(resp, p["reference"], p["evaluator"]))
             if ok:
                 correct += 1
             source_stats.setdefault(src, {"n": 0, "c": 0})
             source_stats[src]["n"] += 1
-            source_stats[src]["c"] += int(ok)
+            source_stats[src]["c"] += 1 if ok else 0
             prog.update(task, advance=1,
                         status=f"{correct}/{i+1} correct ({src})")
 

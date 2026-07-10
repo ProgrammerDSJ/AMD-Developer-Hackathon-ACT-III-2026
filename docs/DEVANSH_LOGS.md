@@ -1,6 +1,6 @@
-# DEVANSH SESSION LOGS
+﻿# DEVANSH SESSION LOGS
 ## Date: July 10-11, 2026 — Late Night Session (IST)
-### Project: AMD Developer Hackathon ACT III 2026 — LLM Routing Infrastructure
+### Project: AMD Developer Hackathon ACT II 2026 — LLM Routing Infrastructure
 
 > **Note:** "Badal" is the name of Devansh's project partner, not the application name.
 
