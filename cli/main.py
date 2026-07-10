@@ -87,7 +87,7 @@ def save_session(s: dict):
 # Calibration check and prompt
 # ---------------------------------------------------------------------------
 
-def check_and_calibrate(cfg: dict) -> dict:
+def check_and_calibrate(cfg: dict, interactive: bool = True) -> dict:
     """
     Detects Ollama models, checks which are calibrated,
     offers to calibrate missing ones. Returns updated config.
@@ -125,6 +125,10 @@ def check_and_calibrate(cfg: dict) -> dict:
     CONSOLE.print(t)
 
     if not uncal:
+        return cfg
+
+    if not interactive:
+        # Non-interactive mode (e.g. grading/tests): skip calibration prompt
         return cfg
 
     CONSOLE.print(f"\n  [yellow]{len(uncal)} model(s) not calibrated.[/yellow]")
@@ -234,9 +238,10 @@ def recalibrate_model_flow(cfg: dict, target_model: str = None) -> dict:
     return cfg
 
 
-def select_active_model(cfg: dict) -> str | None:
+def select_active_model(cfg: dict, interactive: bool = True) -> str | None:
     """
     Let user pick which calibrated model to use this session.
+    If non-interactive, automatically picks the highest capability calibrated model.
     Returns model name or None (remote-only).
     """
     models = cfg.get("models", {})
@@ -244,6 +249,15 @@ def select_active_model(cfg: dict) -> str | None:
         return None
 
     sorted_models = sorted(models.items(), key=lambda x: -x[1]["capability_score"])
+
+    if not interactive:
+        # Auto-select best model for non-interactive execution
+        if sorted_models:
+            name = sorted_models[0][0]
+            CONSOLE.print(f"  [green]Auto-selected local model:[/green] [bold]{name}[/bold]  "
+                          f"(cal acc={models[name]['calibration_acc']*100:.1f}%)\n")
+            return name
+        return None
 
     if len(sorted_models) == 1:
         name = sorted_models[0][0]
@@ -292,23 +306,41 @@ def route_prompt(prompt: str, active_model: str | None,
     ))
 
     # =========================================================================
+    # STEP 0: Feature Extraction
+    # =========================================================================
+    t_feat_start = time.time()
+    feats = extract_features(prompt)
+    fms = (time.time() - t_feat_start) * 1000
+
+    # =========================================================================
     # STEP 1: Gate 0 -- Simplicity Pre-Filter
     # =========================================================================
     CONSOLE.print(Rule("[bold green]Step 1  Gate 0 -- Simplicity Pre-Filter[/bold green]", style="green"))
+
+    # Compute model context first, then call gate
+    has_local  = bool(active_model and cfg.get("models", {}).get(active_model))
+
+    model_data = cfg.get("models", {}).get(active_model, {}) if active_model else {}
+    model_acc  = model_data.get("calibration_acc", 0.0)
+    src_stats  = model_data.get("source_stats", {})
+
+    from inference_wrapper.simplicity_gate import _local_threshold
+    gate_threshold = _local_threshold(model_acc) if has_local else "n/a"
+
     t0 = time.time()
-    is_simple, gate_reason, gate_conf = is_trivially_simple(prompt)
+    is_simple, gate_reason, gate_conf = is_trivially_simple(
+        prompt, feats, model_acc, src_stats if has_local else None
+    )
     gms = (time.time() - t0) * 1000
 
-    has_local = bool(active_model and cfg.get("models", {}).get(active_model))
-
-    # Build Gate 0 display
     gt = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
     gt.add_column("Label", style="dim", width=22)
     gt.add_column("Value", width=50)
-    gt.add_row("Simplicity score", f"[bold]{gate_conf:.2f}[/bold]  (>= 0.70 = simple)")
-    gt.add_row("Decision",        gate_reason)
-    gt.add_row("Local model",     f"[cyan]{active_model or 'None'}[/cyan]")
-    gt.add_row("Gate latency",    f"{gms:.2f}ms")
+    gt.add_row("Simplicity score",  f"[bold]{gate_conf:.2f}[/bold]  (>= {gate_threshold} = local)" if has_local else f"[bold]{gate_conf:.2f}[/bold]")
+    gt.add_row("Decision",          gate_reason)
+    gt.add_row("Local model",       f"[cyan]{active_model or 'None'}[/cyan]")
+    gt.add_row("Model cal acc",     f"{model_acc*100:.1f}%" if has_local else "n/a")
+    gt.add_row("Gate latency",      f"{gms:.2f}ms (feat extract: {fms:.1f}ms)")
     CONSOLE.print(gt)
 
     dest         = "local"
@@ -351,7 +383,6 @@ def route_prompt(prompt: str, active_model: str | None,
         # =================================================================
         CONSOLE.print(Rule("[bold magenta]Step 2  ML Router -- Tier Decision[/bold magenta]", style="magenta"))
         t0   = time.time()
-        feats = extract_features(prompt)
         tier, t1p, t2p = predict(feats)
         rms  = (time.time() - t0) * 1000
 
@@ -428,7 +459,13 @@ def route_prompt(prompt: str, active_model: str | None,
     session["tokens_used"]  += tokens_used
     session["tokens_saved"] += tokens_saved
     session["runs"].append({"dest": dest, "tokens": tokens_used, "saved": tokens_saved})
-    return {"dest": dest, "tokens": tokens_used, "saved": tokens_saved}
+    return {
+        "dest": dest,
+        "tokens": tokens_used,
+        "saved": tokens_saved,
+        "response": response,
+        "latency_ms": round(total_ms, 1)
+    }
 
 # ---------------------------------------------------------------------------
 # Stats display
@@ -477,7 +514,21 @@ def show_stats(session: dict):
 def main():
     args = [a for a in sys.argv[1:] if a]
 
-    # Print banner
+    is_json = "--json" in args
+    if is_json:
+        args.remove("--json")
+        CONSOLE.quiet = True
+
+    # Determine if we are in interactive mode
+    # It is interactive only if no demo, stats, recalibrate, or single-shot prompt is requested
+    has_demo = "--demo" in args
+    has_stats = "--stats" in args
+    has_recal = "--recalibrate" in args
+    has_singleshot = len(args) > 0 and not args[0].startswith("--")
+
+    is_interactive = not (has_demo or has_stats or has_recal or has_singleshot)
+
+    # Print banner (only prints if CONSOLE.quiet is False)
     CONSOLE.print(f"[bold cyan]{BANNER}[/bold cyan]")
     CONSOLE.print(Panel.fit(
         "[bold]AMD Developer Hackathon ACT II 2026[/bold]  --  Token-Efficient LLM Routing\n"
@@ -501,13 +552,13 @@ def main():
         idx         = args.index("--recalibrate")
         target      = args[idx + 1] if idx + 1 < len(args) and not args[idx+1].startswith("--") else None
         cfg         = recalibrate_model_flow(cfg, target)
-        active_model = select_active_model(cfg)
+        active_model = select_active_model(cfg, interactive=is_interactive)
         session      = load_session()
         CONSOLE.print("[green]Recalibration complete. Starting interactive mode...[/green]\n")
         # Fall through to interactive mode with updated config
     else:
-        cfg          = check_and_calibrate(cfg)
-        active_model = select_active_model(cfg)
+        cfg          = check_and_calibrate(cfg, interactive=is_interactive)
+        active_model = select_active_model(cfg, interactive=is_interactive)
         session      = load_session()
 
     # Demo mode
@@ -526,10 +577,15 @@ def main():
         return
 
     # Single-shot CLI argument mode
-    if args and not args[0].startswith("--"):
+    if has_singleshot:
         prompt = " ".join(args)
-        route_prompt(prompt, active_model, cfg, session)
-        show_stats(session)
+        res = route_prompt(prompt, active_model, cfg, session)
+        if is_json:
+            # Output pure, clean JSON on standard stdout, bypassing Rich output entirely
+            sys.stdout.write(json.dumps(res, indent=2) + "\n")
+            sys.stdout.flush()
+        else:
+            show_stats(session)
         save_session(session)
         return
 
