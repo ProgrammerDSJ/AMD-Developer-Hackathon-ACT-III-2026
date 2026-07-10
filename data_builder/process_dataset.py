@@ -13,15 +13,20 @@ IDENTITY
     prompt, reference_answer
 
 HARDCODED FEATURES  (filled by this script)
-    source_task_type_encoded,                        <- NEW: from dataset metadata
+    source_task_type_encoded,
     prompt_length, has_code_block, has_math_symbols,
     question_type, question_type_encoded,
     num_sentences, avg_word_length, complexity_heuristic
 
-LLM-BASED FEATURES  (filled by Badal's tiny agent — blank for now)
-    llm_reasoning_depth, llm_domain,
-    llm_ambiguity_score, llm_requires_factual_recall,
-    llm_task_type, llm_context_dependency
+LLM-BASED FEATURES  (hybrid: rule-based + SmolLM2:360m)
+    llm_reasoning_depth       <- SmolLM2:360m  (filled by fill_llm_features.py)
+    llm_ambiguity_score       <- SmolLM2:360m  (filled by fill_llm_features.py)
+    llm_context_dependency    <- SmolLM2:360m  (filled by fill_llm_features.py)
+    llm_requires_factual_recall <- rule-based  (filled HERE)
+    llm_task_type               <- rule-based  (filled HERE)
+
+    NOTE: llm_domain intentionally OMITTED — source_task_type_encoded
+    already captures domain at ~100% accuracy from benchmark metadata.
 
 BENCHMARK SWEEP RESULTS  (filled during sweep — blank for now)
     local_response,  local_correct,
@@ -48,6 +53,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from feature_extractor.hardcoded_features import extract_hardcoded_features
+from feature_extractor.llm_features import extract_rule_based_features
 
 # ---------------------------------------------------------------------------
 # Column definitions — single source of truth for the CSV schema
@@ -88,15 +94,23 @@ HARDCODED_FEATURE_COLS = [
     "complexity_heuristic",
 ]
 
-# LLM-based features — populated by Badal's sub-0.6B agent
-LLM_FEATURE_COLS = [
-    "llm_reasoning_depth",        # int 1-5: reasoning steps required
-    "llm_domain",                 # str: science/code/math/general/legal/creative
-    "llm_ambiguity_score",        # float 0-1: how underspecified the prompt is
-    "llm_requires_factual_recall",# bool 0/1: needs specific memorised facts
-    "llm_task_type",              # str: generation/classification/extraction/QA
-    "llm_context_dependency",     # bool 0/1: requires external context
+# LLM-based features — HYBRID design:
+#   SmolLM2:360m features  → filled by fill_llm_features.py
+#   Rule-based features    → filled directly in process_prompt() below
+#
+# llm_domain intentionally DROPPED:
+#   Both tested models defaulted to "general" 75-83% of the time.
+#   source_task_type_encoded already covers domain at ~100% accuracy.
+LLM_SMOLLM_COLS = [
+    "llm_reasoning_depth",        # int 1-5  (SmolLM via Ollama)
+    "llm_ambiguity_score",        # float 0-1 (SmolLM via Ollama)
+    "llm_context_dependency",     # int 0/1   (SmolLM via Ollama)
 ]
+LLM_RULE_COLS = [
+    "llm_requires_factual_recall", # int 0/1  (rule: source in {truthfulqa,mmlu,arc})
+    "llm_task_type",               # str      (rule: MCQ→classification, code→generation, etc.)
+]
+LLM_FEATURE_COLS = LLM_SMOLLM_COLS + LLM_RULE_COLS
 
 # Benchmark sweep results — populated during the sweep phase
 SWEEP_COLS = [
@@ -161,8 +175,16 @@ def process_prompt(raw: dict) -> dict:
     )
     row.update(feats)
 
-    # --- LLM features (blank — Badal fills these) -----------------------
-    for col in LLM_FEATURE_COLS:
+    # --- Rule-based LLM features (filled here — deterministic) ------------
+    rule_feats = extract_rule_based_features(
+        source=raw.get("source", ""),
+        question_type=feats.get("question_type", "instructional"),
+        has_code_block=int(feats.get("has_code_block", 0)),
+    )
+    row.update(rule_feats)
+
+    # --- SmolLM features (blank — filled by fill_llm_features.py) ----------
+    for col in LLM_SMOLLM_COLS:
         row[col] = ""
 
     # --- Benchmark sweep results (blank — filled during sweep) ----------
