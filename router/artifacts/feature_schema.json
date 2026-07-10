@@ -1,0 +1,37 @@
+{
+  "feature_cols": [
+    "source_task_type_encoded",
+    "prompt_length",
+    "has_code_block",
+    "has_math_symbols",
+    "question_type_encoded",
+    "num_sentences",
+    "avg_word_length",
+    "complexity_heuristic",
+    "llm_reasoning_depth",
+    "llm_ambiguity_score",
+    "llm_requires_factual_recall",
+    "llm_task_type_encoded",
+    "feat_length_x_depth",
+    "feat_complexity_x_code",
+    "feat_math_x_depth"
+  ],
+  "llm_task_type_map": {
+    "classification": 0,
+    "QA": 1,
+    "generation": 2
+  },
+  "label_map": {
+    "0": "tier1 (gpt-oss-20b)",
+    "1": "tier2 (glm-5p2)"
+  },
+  "n_classes": 2,
+  "dropped_features": [
+    "llm_context_dependency"
+  ],
+  "interaction_features": {
+    "feat_length_x_depth": "prompt_length * llm_reasoning_depth",
+    "feat_complexity_x_code": "complexity_heuristic * has_code_block",
+    "feat_math_x_depth": "has_math_symbols * llm_reasoning_depth"
+  }
+}

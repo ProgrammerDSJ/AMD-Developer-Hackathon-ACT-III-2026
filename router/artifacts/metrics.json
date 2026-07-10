@@ -1,0 +1,45 @@
+{
+  "model": "LightGBM (tuned)",
+  "n_features": 15,
+  "feature_cols": [
+    "source_task_type_encoded",
+    "prompt_length",
+    "has_code_block",
+    "has_math_symbols",
+    "question_type_encoded",
+    "num_sentences",
+    "avg_word_length",
+    "complexity_heuristic",
+    "llm_reasoning_depth",
+    "llm_ambiguity_score",
+    "llm_requires_factual_recall",
+    "llm_task_type_encoded",
+    "feat_length_x_depth",
+    "feat_complexity_x_code",
+    "feat_math_x_depth"
+  ],
+  "train_rows": 623,
+  "test_rows": 156,
+  "xgb_cv_acc": 0.8347,
+  "lgbm_cv_acc": 0.8396,
+  "test_accuracy": 0.8333,
+  "test_macro_f1": 0.8203,
+  "all_model_results": {
+    "XGBoost (tuned)": {
+      "acc": 0.8077,
+      "f1": 0.7981
+    },
+    "LightGBM (tuned)": {
+      "acc": 0.8333,
+      "f1": 0.8203
+    },
+    "Ensemble (XGB+LGB)": {
+      "acc": 0.8205,
+      "f1": 0.8092
+    }
+  },
+  "label_map": {
+    "0": "tier1 (gpt-oss-20b)",
+    "1": "tier2 (glm-5p2)"
+  }
+}
