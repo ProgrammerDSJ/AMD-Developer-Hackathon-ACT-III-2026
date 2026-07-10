@@ -1,0 +1,35 @@
+# HybridRouter — Python Dependencies
+# Phase 1: Data Collection & Dataset Building
+
+# ── Core dataset tooling ─────────────────────────────────────────────────────
+datasets>=2.19.0          # HuggingFace datasets (GSM8K, HumanEval, MMLU, etc.)
+huggingface-hub>=0.23.0   # Required by datasets
+
+# ── ML Router ────────────────────────────────────────────────────────────────
+xgboost>=2.0.3            # Primary router model
+lightgbm>=4.3.0           # Alternative router model
+scikit-learn>=1.4.0       # train_test_split, metrics, class weights
+joblib>=1.3.2             # Model serialization (pkl)
+pandas>=2.2.0             # Dataset manipulation
+numpy>=1.26.0             # Numerical ops
+
+# ── Embedding Similarity (Response Comparator) ───────────────────────────────
+sentence-transformers>=3.0.0   # Local embeddings (all-MiniLM-L6-v2)
+
+# ── Fireworks API (remote model calls) ───────────────────────────────────────
+openai>=1.30.0            # Fireworks uses OpenAI-compatible SDK
+httpx>=0.27.0             # Async HTTP for batched API calls
+
+# ── Local Inference (Ollama) ─────────────────────────────────────────────────
+ollama>=0.2.0             # Ollama Python client
+
+# ── LLM Feature Extractor (sub-0.6B model) ───────────────────────────────────
+transformers>=4.41.0      # For running Qwen2.5-0.5B or SmolLM locally
+torch>=2.3.0              # Required by transformers (CPU-only fine)
+accelerate>=0.30.0        # Speeds up transformers inference
+
+# ── Utilities ────────────────────────────────────────────────────────────────
+tqdm>=4.66.0              # Progress bars
+python-dotenv>=1.0.0      # .env file loading
+pyyaml>=6.0.1             # configs/*.yaml loading
+colorlog>=6.8.0           # Colored logging output
