@@ -13,6 +13,7 @@ IDENTITY
     prompt, reference_answer
 
 HARDCODED FEATURES  (filled by this script)
+    source_task_type_encoded,                        <- NEW: from dataset metadata
     prompt_length, has_code_block, has_math_symbols,
     question_type, question_type_encoded,
     num_sentences, avg_word_length, complexity_heuristic
@@ -62,7 +63,21 @@ IDENTITY_COLS = [
     "reference_answer",
 ]
 
+# Encoding of the ground-truth task_type from the source benchmark.
+# This is more reliable than the keyword-based question_type classifier
+# because it comes from verified dataset metadata, not prompt text analysis.
+SOURCE_TASK_TYPE_ENCODING = {
+    "math":    0,
+    "code":    1,
+    "science": 2,
+    "factual": 3,
+    "general": 4,
+}
+
 HARDCODED_FEATURE_COLS = [
+    # Ground-truth task type from dataset metadata (always accurate)
+    "source_task_type_encoded",
+    # Text-derived features
     "prompt_length",
     "has_code_block",
     "has_math_symbols",
@@ -137,6 +152,13 @@ def process_prompt(raw: dict) -> dict:
 
     # --- Hardcoded features ---------------------------------------------
     feats = extract_hardcoded_features(prompt_text)
+
+    # source_task_type_encoded: integer encoding of the benchmark's own
+    # task_type label — more accurate than keyword-based question_type.
+    source_task = raw.get("task_type", "general").lower()
+    feats["source_task_type_encoded"] = SOURCE_TASK_TYPE_ENCODING.get(
+        source_task, 4   # default to 'general' if unknown
+    )
     row.update(feats)
 
     # --- LLM features (blank — Badal fills these) -----------------------

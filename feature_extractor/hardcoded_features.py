@@ -122,12 +122,28 @@ _QT_ENCODING = {
 
 
 def _classify_question_type(prompt: str) -> tuple[str, int]:
-    """Return (label_str, encoded_int) for the prompt's question type."""
-    head = prompt[:300]          # check only the first 300 chars — the type
-                                 # signal is almost always at the start
-    for label, pattern in _QT_PATTERNS:
+    """
+    Return (label_str, encoded_int) for the prompt's question type.
+
+    Strategy:
+      - Check the first 300 chars (covers most prompt styles).
+      - For the mathematical pattern ONLY, also check the last 150 chars.
+        This catches narrative math problems (GSM8K style) where the
+        question word ('How much', 'How many') appears at the very end
+        after a narrative setup.
+      - All other patterns use head-only to avoid false positives.
+    """
+    head = prompt[:300]
+    tail = prompt[-150:]  # for narrative math tails
+
+    math_label, math_pattern = _QT_PATTERNS[0]   # mathematical is always index 0
+    if math_pattern.search(head) or math_pattern.search(tail):
+        return math_label, _QT_ENCODING[math_label]
+
+    for label, pattern in _QT_PATTERNS[1:]:      # check the rest head-only
         if pattern.search(head):
             return label, _QT_ENCODING[label]
+
     # Default fallback
     return "instructional", _QT_ENCODING["instructional"]
 
@@ -226,16 +242,25 @@ _CODE_PATTERN = re.compile(
 
 _MATH_PATTERN = re.compile(
     r"""
-    [∑∫π√∞±×÷≤≥≠≈]                 |   # Unicode math symbols
-    \\(?:frac|sum|int|sqrt|pi|       
-        infty|cdot|times|div|        
+    # ── Symbolic math ───────────────────────────────────────────────────────
+    [\u2211\u222b\u03c0\u221a\u221e\u00b1\u00d7\u00f7\u2264\u2265\u2260\u2248] |  # Unicode math symbols
+    \\(?:frac|sum|int|sqrt|pi|
+        infty|cdot|times|div|
         leq|geq|neq|approx)\b        |   # LaTeX commands
-    \b(?:sqrt|log|ln|sin|cos|tan|   
+    \b(?:sqrt|log|ln|sin|cos|tan|
         arcsin|arccos|arctan)\s*\(   |   # math functions
     \d+\s*[\^]\s*\d+                |   # exponentiation  (2^3)
     \d+\s*[=<>]\s*\d+               |   # numeric comparison / equation
     [a-z]\s*=\s*[-\d]               |   # variable assignment (x = 5)
-    \d+\s*[\+\-\*\/]\s*\d+              # arithmetic expression
+    \d+\s*[\+\-\*\/]\s*\d+          |   # arithmetic expression
+    # ── Narrative math (GSM8K-style word problems) ──────────────────────────
+    \$\s*\d+                        |   # dollar amounts  ($3, $150)
+    \d+\s*\$                        |   # amount then sign  (3$)
+    \d+(?:\.\d+)?\s*(?:percent|%)   |   # percentages  (15%, 15 percent)
+    \b\d+\s+(?:each|per\s+\w+|apiece|altogether|in\s+total)  |  # unit pricing
+    \b(?:total|sum|difference|product|quotient|remainder|profit|loss)\b  |  # operation vocabulary
+    \bhow\s+(?:much|many)\b         |   # quantity questions (narrative math tail)
+    \d+\s+(?:more|less|fewer|times(?:\s+as\s+(?:many|much))?)  # comparisons
     """,
     re.IGNORECASE | re.VERBOSE,
 )
