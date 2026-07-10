@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  hybridrouter:
+    build: .
+    container_name: hybridrouter-cli
+    environment:
+      # Pass Fireworks API Key from the host environment
+      - FIREWORKS_API_KEY=${FIREWORKS_API_KEY}
+      # If running on CPU, keep this. If GPU is available on Linux, you can un-comment the deploy block below.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    stdin_open: true # Equivalent to -i (interactive stdin)
+    tty: true        # Equivalent to -t (interactive tty)
