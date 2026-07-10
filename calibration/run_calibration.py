@@ -125,7 +125,24 @@ def _score(response: str, reference: str, evaluator: str) -> bool:
         except Exception:
             return bool(got == exp)
     elif evaluator == "code":
-        return "def " in r or "return " in r or "print(" in r
+        # Require a real function definition with a non-trivial body.
+        # Rule out: no-code cop-out phrases
+        cop_out = any(phrase in r.lower() for phrase in [
+            "i cannot", "i can't", "i don't know", "sorry, i",
+            "as an ai", "i'm unable", "i am unable",
+        ])
+        if cop_out:
+            return False
+        # Must have a function definition AND a return/yield
+        has_def    = "def " in r
+        has_return = "return " in r or "yield " in r
+        if not (has_def and has_return):
+            return False
+        # Must have a non-trivial body: at least 3 lines of code OR 80+ chars of code
+        code_lines = [l for l in r.split("\n") if l.strip() and not l.strip().startswith("#")]
+        has_substance = len(code_lines) >= 3 or len(r.strip()) >= 80
+        return has_substance
+
     return False
 
 
