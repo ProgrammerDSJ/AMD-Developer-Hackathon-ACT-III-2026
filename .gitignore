@@ -1,0 +1,12 @@
+.env
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+# Session / runtime
+cli/.session.json
+# Virtualenv
+venv/
+.venv/
+env/
