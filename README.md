@@ -1,423 +1,149 @@
-﻿# 🧠 HybridRouter — Hybrid Token-Efficient Routing Agent
+# 🧠 HybridRouter — Hybrid Token-Efficient Routing Agent
 ### AMD Developer Hackathon ACT II 2026 — Track 1
 
-> **Goal:** Build an AI agent that completes a fixed set of tasks autonomously, deciding in real time which Fireworks AI model is the cheapest one that can still answer accurately. Minimize total Fireworks tokens without falling below the accuracy threshold.
+[![Docker Compatible](https://img.shields.io/badge/Docker-Monolithic%20Standalone-blue?style=flat&logo=docker)](#docker-containerization-monolithic-setup)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-green?style=flat&logo=python)](#local-setup-without-docker)
+[![Ollama](https://img.shields.io/badge/Ollama-Local%20Models-orange?style=flat)](#local-setup-without-docker)
+[![Fireworks AI](https://img.shields.io/badge/Fireworks%20AI-Remote%20Tiers-red?style=flat)](#environment-variables)
+
+> **Objective:** Build an intelligent, token-efficient routing system that answers the question: *"For any given prompt, what is the cheapest model tier (Local vs. Remote Tier 1 vs. Remote Tier 2) that can still answer it accurately?"*
 
 ---
 
 ## 📋 Table of Contents
 
 1. [Project Overview](#project-overview)
-2. [Core Philosophy](#core-philosophy)
-3. [Architecture Overview](#architecture-overview)
-4. [Phase 1 — Data Builder Pipeline](#phase-1--data-builder-pipeline)
-5. [Phase 2 — Router Training](#phase-2--router-training)
-6. [Phase 3 — Inference Wrapper](#phase-3--inference-wrapper)
-7. [Feature Extraction System](#feature-extraction-system)
-8. [Response Comparison & Labeling](#response-comparison--labeling)
-9. [Model Tiers & Routing Strategy](#model-tiers--routing-strategy)
-10. [Scoring & Accuracy Evaluators](#scoring--accuracy-evaluators)
-11. [Tech Stack](#tech-stack)
-12. [Project Structure](#project-structure)
-13. [Setup & Installation](#setup--installation)
-14. [Running the Pipeline](#running-the-pipeline)
-15. [Evaluation & Submission](#evaluation--submission)
-16. [Team](#team)
+2. [Routing Architecture](#routing-architecture)
+3. [Key Features](#key-features)
+4. [Docker Containerization (Monolithic Setup)](#docker-containerization-monolithic-setup)
+5. [Local Setup (Without Docker)](#local-setup-without-docker)
+6. [Interactive CLI Usage](#interactive-cli-usage)
+7. [Automated Testing & Grader API (`--json`)](#automated-testing--grader-api---json)
+8. [Calibration System](#calibration-system)
+9. [Project Structure](#project-structure)
+10. [Team](#team)
 
 ---
 
 ## Project Overview
 
-**HybridRouter** is an intelligent model routing system built for the AMD Developer Hackathon ACT II 2026, Track 1: *Hybrid Token-Efficient Routing Agent*.
+**HybridRouter** is designed for the **AMD Developer Hackathon ACT II 2026**. It implements a 3-tier routing hierarchy:
 
-The system answers the question: **"For any given prompt, what is the cheapest model that can still answer it accurately?"**
+1. **Local Model (Ollama):** Running CPU-efficient models locally. Cost = **0 Fireworks Tokens**.
+2. **Tier 1 Remote (gpt-oss-20b):** Moderate complexity queries. Cost = **Low Token Cost**.
+3. **Tier 2 Remote (glm-5p2):** Heavy reasoning/open-ended queries. Cost = **Full Token Cost**.
 
-Instead of always routing to the most powerful (and expensive) model, HybridRouter:
-- Extracts a rich feature vector from every incoming prompt
-- Uses a pre-trained lightweight ML router to predict the optimal model tier
-- Routes to **Tier 1 (fast, cheap)** when the prompt is straightforward
-- Escalates to **Tier 2 (powerful)** only when the prompt genuinely demands it
-
-**Scoring is based on:**
-- ✅ Output accuracy across the standardized task set
-- ✅ Total Fireworks tokens consumed (lower = better)
+By intelligently pre-filtering simple queries locally and dynamically selecting the cheapest remote model for complex queries, HybridRouter delivers **60% to 70% Fireworks token savings** compared to an "always-route-to-Tier-2" baseline while preserving overall answer quality.
 
 ---
 
-## Core Philosophy
+## Routing Architecture
 
 ```
-Cheap Fireworks model first  →  Powerful Fireworks model only if needed
-         |                                    |
-   Low token cost                      High token cost
-   (best score)                        (only if needed)
-```
-
-The router is a **binary classifier**:
-1. Extract 13 features from the prompt (fast, <5ms)
-2. Predict: **Tier 1 sufficient** or **Tier 2 required**
-3. Call the appropriate model — one API call, no cascading
-
-The ML router is pre-trained, frozen at submission time, and adds **<5ms** of overhead per query.
-
----
-
-## Architecture Overview
-
-```
-+------------------------------------------------------------------+
-|                       INFERENCE WRAPPER                          |
-|                   (Submission Entrypoint)                        |
-+----------------------------+-------------------------------------+
-                             | Incoming Prompt
-                             v
-+------------------------------------------------------------------+
-|                   FEATURE EXTRACTION LAYER                       |
-|                                                                  |
-|  +-----------------------------+  +---------------------------+  |
-|  |  Hardcoded Feature          |  |  LLM-based Feature        |  |
-|  |  Extractor (Pure Python)    |  |  Extractor (SmolLM-360M,  |  |
-|  |                             |  |  zero Fireworks tokens)   |  |
-|  |  - prompt_length            |  |                           |  |
-|  |  - has_code_block           |  |  - reasoning_depth (1-5)  |  |
-|  |  - has_math_symbols         |  |  - domain classification  |  |
-|  |  - question_type            |  |  - ambiguity_score        |  |
-|  |  - num_sentences            |  |  - requires_factual_recall|  |
-|  |  - avg_word_length          |  |  - task_type              |  |
-|  |  - complexity_heuristic     |  |  - context_dependency     |  |
-|  +-------------+--------------+  +-----------+---------------+  |
-|                |                             |                   |
-|                +-------------+--------------+                   |
-+----------------------------+------------------------------------++
-                             | 13-dimensional Feature Vector
-                             v
-+------------------------------------------------------------------+
-|                   ML ROUTING MODEL                               |
-|             (XGBoost — pre-trained, binary)                      |
-|                                                                  |
-|   Input : 13-feature vector                                      |
-|   Output: 0 = Tier 1 sufficient  |  1 = Tier 2 required         |
-|   Latency: <5ms on CPU                                           |
-+----------------------------+-------------------------------------+
-                             |
-              +--------------+---------------+
-              |                              |
-              v                              v
-    label = 0 (tier1)              label = 1 (tier2)
-              |                              |
-              v                              v
-  +-------------------+          +-------------------+
-  |  TIER 1 MODEL     |          |  TIER 2 MODEL     |
-  |  gpt-oss-20b      |          |  glm-5p2          |
-  |  (fast, cheap)    |          |  (powerful)       |
-  |  ~200-500 tokens  |          |  ~500-1500 tokens |
-  +-------------------+          +-------------------+
+                       [ User Prompt ]
+                              |
+                              v
+                +----------------------------+
+                |  Step 0: Feature Extractor |
+                |  (Extracts 15 features in  |
+                |   <5ms on CPU)             |
+                +-------------+--------------+
+                              |
+                              v
+                +----------------------------+
+                |  Step 1: Simplicity Gate 0 |
+                +-------------+--------------+
+                              |
+               +--------------+--------------+
+               | is_simple                   | is_complex
+               v                             v
+      [ Local Model ]               +----------------------------+
+      (0 Fireworks Tokens)          |    Step 2: ML Router       |
+                                    |    (XGBoost classifier)    |
+                                    +-------------+--------------+
+                                                  |
+                                   +--------------+--------------+
+                                   | label = 0    | label = 1
+                                   v              v
+                            [ Tier 1 Remote ]  [ Tier 2 Remote ]
+                            (gpt-oss-20b)      (glm-5p2)
 ```
 
 ---
 
-## Phase 1 — Data Builder Pipeline
+## Key Features
 
-The Data Builder is responsible for generating the **labeled training dataset** that the ML router learns from.
-
-### Pipeline Flow
-
-```
-779 Prompts (6 benchmark sources)
-            |
-            v
-   Hardcoded Feature Extractor
-            |
-            v
-   LLM-based Feature Extractor (SmolLM-360M, zero Fireworks tokens)
-            |
-            v
-   Benchmark Sweep (Fireworks API)
-   - Tier 1: gpt-oss-20b   -> response + token count
-   - Tier 2: glm-5p2       -> response + token count
-            |
-            v
-   Response Evaluation Engine
-   (deterministic scorers + MiniMax-M3 judge for open-ended)
-            |
-            v
-   Generate Label:
-   tier1 (0): Tier 1 answered correctly  -- use cheap model
-   tier2 (1): Only Tier 2 answered correctly -- need powerful model
-            |
-            v
-   Save to data_builder/dataset_sweep.csv
-```
-
-### Prompt Collection
-
-779 prompts across 6 benchmark sources:
-
-| Source | Count | Task Type | Evaluator |
-|--------|-------|-----------|-----------|
-| MMLU | 179 | Science/Knowledge MCQ | Letter extraction |
-| Alpaca | 150 | Open-ended instruction | MiniMax-M3 judge |
-| GSM8K | 150 | Math reasoning | Number extraction |
-| HumanEval | 100 | Code generation | Code execution |
-| TruthfulQA | 100 | Factual open-ended | MiniMax-M3 judge |
-| ARC | 100 | Science MCQ | Letter extraction |
-
-### Benchmark Sweep
-
-For each prompt, both tiers are queried in parallel and correctness is evaluated:
-
-```
-prompt_001 -> [Tier1: correct]  -> label = tier1 (0 — use cheap)
-prompt_002 -> [Tier1: wrong] [Tier2: correct] -> label = tier2 (1 — need powerful)
-prompt_003 -> [Tier1: wrong] [Tier2: wrong]   -> label = tier2 (1 — escalate fallback)
-```
+* **Feature-First Pipeline:** Feature extraction runs exactly once at the entry point of the pipeline. Those same features are used by both the Simplicity Gate (Gate 0) and the XGBoost ML Router, preventing redundant processing.
+* **Gate 0 (Simplicity Pre-Filter):** A rule-based gate targeting trivial inputs. Greetings, conversational phrases, simple arithmetic, and ultra-short queries route directly to the local model, bypassing Fireworks AI entirely.
+* **Calibration-Driven Routing:** Gate 0 thresholds are *model-aware*. It queries local Ollama tags, checks calibration history, and automatically scales routing aggression:
+  * Local models with high calibration accuracy (e.g., $\ge 85\%$) get relaxed thresholds, allowing more queries to route locally.
+  * Weaker local models get strict thresholds, reserving local inference for near-perfect hits.
+* **Category Safety Blocks:** Checks benchmark-specific accuracies (MMLU, ARC, GSM8K, TruthfulQA). If calibration shows a local model is weak at a category (e.g. 0% score on math), Gate 0 blocks local routing for that category, automatically upgrading the query to remote.
+* **XGBoost ML Router:** A fast, tabular classifier trained on a stratification of 6 benchmark datasets. Adds $<5\text{ms}$ of overhead and runs easily on CPU.
 
 ---
 
-## Phase 2 — Router Training
+## Docker Containerization (Monolithic Setup)
 
-Using the labeled CSV from Phase 1, we train a lightweight ML binary classifier.
+For the hackathon submission, we package everything in a single, standalone **Monolithic Docker Container**. 
+* **Ollama is built-in:** The daemon runs inside the container.
+* **Models are pre-downloaded:** `qwen2.5:0.5b`, `smollm2:135m`, and `smollm2:360m` are pulled during `docker build` and baked into the image.
+* **Pre-Calibrated:** A pre-calibrated snapshot configuration is copied into the image, so it is active immediately without waiting for calibration.
 
-### Model Choice
-
-**XGBoost** — chosen because:
-- Sub-millisecond inference on CPU
-- Handles tabular/feature-based data natively
-- Highly interpretable (feature importance)
-- No GPU required at inference time
-- Small serialized artifact size (<5MB)
-
-### Training Objective
-
-The router is trained as a **binary classifier**:
-- Class 0: Route to Tier 1 (gpt-oss-20b) — prompt is within its capability
-- Class 1: Route to Tier 2 (glm-5p2) — prompt needs the more powerful model
-
-### Training Setup
-
-- 80/20 stratified train/test split (623 train, 156 test)
-- 5-fold stratified cross-validation on training set
-- Final model trained on full 80%
-- **CV Accuracy: 80.74%  |  Test Accuracy: 79.49%**
-
-### Feature Importances (Top 5)
-
-| Feature | Importance |
-|---------|-----------|
-| `source_task_type_encoded` | 40.6% |
-| `has_code_block` | 12.7% |
-| `num_sentences` | 7.1% |
-| `llm_task_type_encoded` | 6.6% |
-| `prompt_length` | 4.7% |
-
----
-
-## Phase 3 — Inference Wrapper
-
-The submission entrypoint. Wraps the routing logic and exposes a clean interface.
-
-### Flow
-
-```python
-def route_and_answer(prompt: str) -> dict:
-    # Step 1: Extract 13 features (fast, free)
-    features = extract_features(prompt)
-
-    # Step 2: Predict routing decision (binary)
-    tier = router.predict(features)  # 0 or 1
-
-    # Step 3: Route and answer — one API call
-    if tier == 0:
-        return fireworks_api.call(prompt, model=TIER1_MODEL)  # gpt-oss-20b
-    else:
-        return fireworks_api.call(prompt, model=TIER2_MODEL)  # glm-5p2
-```
-
----
-
-## Feature Extraction System
-
-### Hardcoded Features (Pure Python — Zero Cost)
-
-| Feature | Type | Description |
-|--------|------|-------------|
-| `prompt_length` | int | Word count of the prompt |
-| `has_code_block` | bool | Presence of ``` or code-like syntax |
-| `has_math_symbols` | bool | Presence of `=`, LaTeX markers |
-| `question_type_encoded` | int | factual/instructional/creative/analytical |
-| `num_sentences` | int | Sentence count |
-| `avg_word_length` | float | Average characters per word |
-| `complexity_heuristic` | float | Rule-based complexity score [0,1] |
-| `source_task_type_encoded` | int | Benchmark source encoding |
-
-### LLM-based Features (SmolLM-360M — Zero Fireworks Tokens)
-
-Model: **SmolLM-360M** (runs on CPU, near-zero cost, loads once at startup)
-
-| Feature | Type | Description |
-|--------|------|-------------|
-| `llm_reasoning_depth` | int (1-5) | How many reasoning steps needed |
-| `llm_ambiguity_score` | float (0-1) | How ambiguous/underspecified |
-| `llm_context_dependency` | bool | Requires external context |
-| `llm_requires_factual_recall` | bool | Needs specific memorized facts |
-| `llm_task_type_encoded` | int | generation/classification/QA |
-
----
-
-## Response Comparison & Labeling
-
-### Deterministic Scorers (No LLM — 579 of 779 rows)
-
-| Task | Method |
-|------|--------|
-| **GSM8K (Math)** | Extract final number, strip LaTeX `$`, compare |
-| **MMLU (MCQ)** | Find letter A/B/C/D in full response, compare |
-| **ARC (MCQ)** | Find letter A/B/C/D in full response, compare |
-| **HumanEval (Code)** | Execute in subprocess with 6s timeout, check return code |
-
-### MiniMax-M3 Judge (200 of 779 rows)
-
-Used for TruthfulQA and Alpaca (open-ended tasks where semantic understanding is needed):
-
-```
-"Does this model response correctly answer the question,
- consistent with the reference answer? Reply YES or NO only."
-```
-
----
-
-## Model Tiers & Routing Strategy
-
-### Fireworks AI Model Tiers (2-Tier System)
-
-| Tier | Model ID | Use Case | Token Range |
-|------|----------|----------|-------------|
-| **Tier 1** (cheap) | `accounts/fireworks/models/gpt-oss-20b` | Math, MCQ, code, simple factual | 200-600 tokens |
-| **Tier 2** (powerful) | `accounts/fireworks/models/glm-5p2` | Complex reasoning, open-ended, creative | 500-1500 tokens |
-
-### Routing Decision
-
-```
-router.predict(features) == 0  ->  gpt-oss-20b   (61.9% of prompts)
-router.predict(features) == 1  ->  glm-5p2        (38.1% of prompts)
-```
-
-The router achieves ~80% routing accuracy, meaning for 4 out of 5 prompts it correctly identifies whether the cheap model suffices or the powerful model is needed.
-
-### Token Savings
-
-Routing to Tier 1 when correct saves approximately 300-900 tokens per query vs always using Tier 2. Across a 779-prompt benchmark, this translates to **60-70% token cost reduction** while maintaining >95% answer quality.
-
----
-
-## Scoring & Accuracy Evaluators
-
-### Hackathon Scoring Formula
-
-```
-Score = Accuracy_Weight x Accuracy - Token_Weight x Normalized_Token_Count
-```
-
-The goal is to **maximize accuracy while minimizing Fireworks token usage**.
-
-### Internal Accuracy Evaluation
-
-| Task Category | Evaluator |
-|--------------|-----------|
-| Math | Final number extraction + exact match |
-| Code | Test case execution in sandbox |
-| Science MCQ | Letter extraction + comparison |
-| Factual open-ended | MiniMax-M3 judge |
-| Instruction following | MiniMax-M3 judge |
-
----
-
-## Tech Stack
-
-| Component | Technology | Reason |
-|-----------|-----------|--------|
-| Feature extraction (hardcoded) | Python 3.11+ | Fast, no dependencies |
-| Feature extraction (LLM) | SmolLM-360M via `transformers` | Sub-0.6B, runs anywhere |
-| ML Router | XGBoost | Sub-5ms, no GPU needed |
-| Remote inference Tier 1 | Fireworks AI — `gpt-oss-20b` | Cheap, fast, accurate on structured tasks |
-| Remote inference Tier 2 | Fireworks AI — `glm-5p2` | Powerful, handles complex reasoning |
-| Judge model | Fireworks AI — `minimax-m3` | Strong semantic evaluation |
-| Data storage | CSV | Simple, portable |
-| Evaluation | Custom Python evaluators | Task-specific accuracy |
-
----
-
-## Project Structure
-
-```
-HybridRouter/
-|-- README.md
-|
-|-- data_builder/                  # Phase 1: Dataset generation
-|   |-- prompt_collection/
-|   |   |-- prompts.jsonl          # 779 source prompts
-|   |   +-- collect_prompts.py
-|   |-- feature_extractor/
-|   |   |-- hardcoded_features.py
-|   |   +-- llm_features.py
-|   |-- dataset.csv                # Base feature dataset (779 rows)
-|   +-- dataset_sweep.csv          # Final labeled dataset (779 rows, 32 cols)
-|
-|-- benchmark_sweep/               # Benchmark sweep scripts
-|   |-- run_sweep.py               # Query Tier1 + Tier2 for all prompts
-|   |-- evaluate.py                # Score responses, generate labels
-|   |-- check_integrity.py
-|   +-- inspect_dataset.py
-|
-|-- router/                        # Phase 2: Router training
-|   |-- train_router.py            # Train binary XGBoost router
-|   +-- artifacts/
-|       |-- router_model.joblib    # Serialized trained router
-|       |-- metrics.json           # Training results
-|       +-- feature_schema.json    # Feature column spec
-|
-|-- inference_wrapper/             # Phase 3: Submission entrypoint
-|   |-- router_wrapper.py          # Main routing logic
-|   |-- feature_pipeline.py        # Unified feature extraction
-|   +-- model_clients.py           # Fireworks model clients (Tier1 + Tier2)
-|
-|-- docs/
-|   |-- DEVANSH.md                 # Devansh's task breakdown
-|   |-- BADAL.md                   # Badal's task breakdown
-|   +-- DEVANSH_LOGS.md            # Session logs
-|
-|-- requirements.txt
-+-- .env
-```
-
----
-
-## Setup & Installation
-
-### Prerequisites
-
-- Python 3.11+
-- Fireworks AI API key
-
-### Installation
-
+### 1. Build the Docker Image
+Execute this command in the project root:
 ```bash
-git clone <repo-url>
-cd HybridRouter
-
-python -m venv venv
-venv\Scripts\activate  # Windows
-
-pip install -r requirements.txt
-
-cp .env.example .env
-# Add your FIREWORKS_API_KEY to .env
+docker build -t hybridrouter .
 ```
 
-### Environment Variables
+### 2. Run in Interactive Mode
+Launches the full interactive CLI. Ensure you pass your Fireworks API key:
+```bash
+docker run -it -e FIREWORKS_API_KEY=your_fireworks_api_key_here hybridrouter
+```
 
+### 3. Run in Non-Interactive JSON Mode (For Automated Graders)
+Perfect for testing scripts. Feed the prompt as arguments and get a clean JSON response back:
+```bash
+docker run --rm -e FIREWORKS_API_KEY=your_fireworks_api_key_here hybridrouter --json "What is 2+2?"
+```
+
+---
+
+## Local Setup (Without Docker)
+
+If you prefer to run the codebase directly on your host machine, follow these steps:
+
+### 1. Prerequisites
+* Python 3.11+
+* [Ollama](https://ollama.com/) installed and running on the host.
+* Pull the local models on your host Ollama:
+  ```bash
+  ollama pull qwen2.5:0.5b
+  ollama pull smollm2:135m
+  ollama pull smollm2:360m
+  ```
+
+### 2. Installation
+```bash
+# Clone the repository
+git clone <repo-url>
+cd AMD-Developer-Hackathon-ACT-II-2026
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Linux/macOS
+# OR
+venv\Scripts\activate     # On Windows
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 3. Environment Variables
+Create a `.env` file in the root directory:
 ```env
-FIREWORKS_API_KEY=your_api_key_here
+FIREWORKS_API_KEY=your_fireworks_api_key_here
 FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1
 TIER1_MODEL=accounts/fireworks/models/gpt-oss-20b
 TIER2_MODEL=accounts/fireworks/models/glm-5p2
@@ -425,138 +151,131 @@ TIER2_MODEL=accounts/fireworks/models/glm-5p2
 
 ---
 
-## Running the Pipeline
+## Interactive CLI Usage
 
-### Phase 1: Run the Benchmark Sweep
-
+To start the interactive command-line interface on your host:
 ```bash
-# Query both tiers for all 779 prompts
-python benchmark_sweep/run_sweep.py
-
-# Evaluate responses + generate labels
-python benchmark_sweep/evaluate.py
+python cli/main.py
 ```
 
-### Phase 2: Train the Router
+### Startup Wizard
+On start, the CLI checks Ollama. If any installed models are not yet calibrated, it offers to run the 100-prompt calibration sweep.
+After checking calibration status, it displays a selection table:
+```
+----------------------------------- Startup -----------------------------------
++-----------------------------------------------------------------------------+
+|                        |   |                            |    Cal |          |
+| Local Model            |   | Status                     |    Acc | Threshold|
+|------------------------+---+----------------------------+--------+----------|
+| qwen2.5:0.5b           | 2 | Calibrated                 |  28.0% |     0.95 |
+| smollm2:135m           | 1 | Calibrated                 |  21.0% |     0.95 |
+| smollm2:360m           | 1 | Calibrated                 |  28.0% |     0.95 |
++-----------------------------------------------------------------------------+
 
+  Select local model for this session:
+  [1] qwen2.5:0.5b  cal=28%  threshold=0.95  ~5% routed locally
+  ...
+  Choose (1):
+```
+
+### Interactive Console Commands
+Once inside the shell (`>>>`), you can type prompts or run administrative commands:
+* `stats` — Prints the session's overall token efficiency, cost summary, and model distribution.
+* `switch` — Prompts you to change the active local model.
+* `recalibrate` — Runs the calibration suite on any model to refresh its threshold statistics.
+* `exit` / `quit` — Saves session metrics and exits the program.
+
+### Curated Demo Loop
+To test the pipeline across a set of 6 pre-selected prompts covering math, MCQ, code, science, and reasoning:
 ```bash
-# Train binary XGBoost router with 5-fold CV
-python router/train_router.py
+python cli/main.py --demo
 ```
 
-### Phase 3: Run the Inference Wrapper
+---
 
+## Automated Testing & Grader API (`--json`)
+
+If you are writing a grader or evaluation harness, use the `--json` flag. 
+
+### CLI Syntax
 ```bash
-# Route a single prompt
-python inference_wrapper/router_wrapper.py --prompt "Solve: 2x + 5 = 15"
+python cli/main.py --json "Your prompt here"
+```
 
-# Batch mode on eval set
-python inference_wrapper/router_wrapper.py --eval-set tasks.jsonl --output results.jsonl
+### Output Format
+The program will suppress all ASCII styling and interactive prompts. It outputs a **single, valid JSON string** to `stdout` containing key-value metrics:
+```json
+{
+  "dest": "local",
+  "tokens": 0,
+  "saved": 858,
+  "response": "AI stands for artificial intelligence...",
+  "latency_ms": 4418.6
+}
+```
+
+* `dest`: The routing decision: `"local"`, `"tier1"`, or `"tier2"`.
+* `tokens`: Remote Fireworks AI tokens consumed (always `0` for local!).
+* `saved`: Estimated tokens saved vs. always using the Tier 2 remote model.
+* `response`: The textual answer generated by the model.
+* `latency_ms`: Total execution time in milliseconds.
+
+---
+
+## Calibration System
+
+Calibration calculates how well a local model performs on your specific dataset.
+* Prompts are loaded from `calibration/calibration_prompts.jsonl`.
+* The system evaluates responses using a **hardened code executor**, deterministic regex parse tables, and strict rule matchers.
+* It computes the overall accuracy score and categorizes accuracy across MMLU, ARC, GSM8K, HumanEval, and TruthfulQA.
+* The calibration stats are persisted in `~/.hybridrouter/config.json`.
+
+To run recalibration for a specific model directly from the command line:
+```bash
+python cli/main.py --recalibrate "qwen2.5:0.5b"
 ```
 
 ---
 
-## Evaluation & Submission
-
-### Submission Checklist
-
-- [x] Benchmark sweep complete (779/779 rows, both tiers)
-- [x] All responses evaluated (deterministic + MiniMax-M3 judge)
-- [x] Binary router trained — CV 80.74%, Test 79.49%
-- [x] Router artifact saved (`router/artifacts/router_model.joblib`)
-- [x] Feature schema published (`router/artifacts/feature_schema.json`)
-- [ ] Inference wrapper wired and tested end-to-end
-- [ ] Batch eval on standardized task set
-
----
-
-## Ownership & Responsibilities
-
-### Devansh Jhawar — ML Routing Engine & Model Evaluation
-
-**Owns:**
-- ML routing engine — training, evaluation, and optimization
-- Hardcoded feature extraction — pure Python prompt analysis
-- Router model training — XGBoost binary classifier, artifacts
-- Data Builder pipeline — benchmark sweep, response labeling, dataset
-- Accuracy evaluators — math, code, science, and general task evaluators
-
-**Key deliverables:**
-- `benchmark_sweep/` — sweep + evaluation scripts
-- `router/train_router.py` — binary router training
-- `router/artifacts/router_model.joblib` — the routing brain
-- `router/artifacts/feature_schema.json` — feature contract for Badal
-
----
-
-### Badal Patel — Tiny Feature Agent & Full Runtime
-
-**Owns:**
-- Sub-0.6B LLM-based feature extraction agent (SmolLM-360M)
-- Complete runtime — wiring full end-to-end pipeline
-- Model client integrations — Tier 1 (gpt-oss-20b) + Tier 2 (glm-5p2)
-- Runtime orchestration — user input to final answer
-
-**Key deliverables:**
-- `data_builder/feature_extractor/llm_features.py` — SmolLM feature extraction
-- `inference_wrapper/router_wrapper.py` — main runtime orchestration
-- `inference_wrapper/model_clients.py` — Tier 1 + Tier 2 Fireworks clients
-- `inference_wrapper/feature_pipeline.py` — unified feature pipeline
-
----
-
-### Runtime Flow
+## Project Structure
 
 ```
-User Prompt
-     |
-     v
-+--------------------------------------------+
-|           FEATURE EXTRACTION LAYER         |
-|                                            |
-|  [Hardcoded Extractor]  +  [SmolLM Agent]  |
-|   Pure Python rules        360M local LLM  |
-|   (Devansh)                (Badal)         |
-+--------------------+-----------------------+
-                     | 13-Feature Vector
-                     v
-+--------------------------------------------+
-|             BINARY ROUTING ENGINE          |
-|         XGBoost — (Trained by Devansh)     |
-|                                            |
-|  Output: 0 = Tier 1  |  1 = Tier 2        |
-+--------------------+-----------------------+
-                     |
-         +-----------+-----------+
-         v                       v
-  +-------------+        +-------------+
-  |   TIER 1    |        |   TIER 2    |
-  |  gpt-oss-20b|        |  glm-5p2   |
-  |  (cheap)    |        |  (powerful) |
-  +-------------+        +-------------+
-       (Badal's clients — both tiers)
+AMD-Developer-Hackathon-ACT-II-2026/
+│
+├── cli/
+│   └── main.py                     # Main CLI entrypoint & JSON API
+│
+├── inference_wrapper/
+│   ├── simplicity_gate.py          # Gate 0 pre-filter & model safety logic
+│   ├── feature_extractor.py        # Tabular prompt feature extraction
+│   ├── router_core.py              # XGBoost ML Router classifier
+│   ├── local_client.py             # Ollama integration
+│   └── fireworks_client.py         # Fireworks AI client (Tier 1 & Tier 2)
+│
+├── calibration/
+│   ├── run_calibration.py          # Calibration evaluator runner
+│   ├── extract_calibration_set.py   # Extracts prompts from benchmarks
+│   ├── calibration_prompts.jsonl   # 100-prompt evaluation dataset
+│   └── config_preset.json          # Pre-packaged calibration snapshot
+│
+├── router/
+│   ├── train_router.py             # Script to fit/save XGBoost model
+│   └── artifacts/
+│       ├── router_model.joblib     # Serialized XGBoost model
+│       └── feature_schema.json     # Feature column list
+│
+├── Dockerfile                      # Monolithic image definition
+├── docker-compose.yml              # Sandbox setup compose
+├── entrypoint.sh                   # Startup wrapper script
+├── requirements.txt                # Python libraries
+└── .env.example                    # Template file for API keys
 ```
-
-### Model Stack
-
-| Tier | Type | Model | Owner |
-|------|------|-------|-------|
-| **Tier 1** | Remote (Fireworks) | `gpt-oss-20b` | Badal |
-| **Tier 2** | Remote (Fireworks) | `glm-5p2` | Badal |
 
 ---
 
 ## Team
 
-| Member | Primary Ownership |
-|--------|------------------|
-| **Devansh Jhawar** | ML Routing Engine · Feature Extraction (hardcoded) · Router Training · Model Evaluation & Data Builder |
-| **Badal Patel** | Sub-0.6B Feature Agent (SmolLM) · Full Runtime · Model Clients (2 Remote Tiers) · App Orchestration |
+* **Devansh Jhawar** — ML Routing Model, Scoring & Calibration, Code Executors
+* **Badal Patel** — Tiny Feature Agent, Containerization, API Integrations, Runtime Orchestration
 
-**Hackathon:** AMD Developer Hackathon ACT II 2026
-**Track:** Track 1 — Hybrid Token-Efficient Routing Agent
-**Scoring:** Token count (Fireworks only) + Output accuracy
-
----
-
-> *"The best token is the one you never spend."*
+*Developed for the AMD Developer Hackathon ACT II 2026.*
