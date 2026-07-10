@@ -2,10 +2,12 @@
 cli/main.py  --  HybridRouter Unified Interactive CLI
 ------------------------------------------------------
 Usage:
-  python cli/main.py                    # Interactive mode (recommended)
-  python cli/main.py "What is AI?"      # Single-shot prompt
-  python cli/main.py --demo             # Run 6-prompt curated demo
-  python cli/main.py --stats            # Show session stats only
+  python cli/main.py                          # Interactive mode (recommended)
+  python cli/main.py "What is AI?"            # Single-shot prompt
+  python cli/main.py --demo                   # Run 6-prompt curated demo
+  python cli/main.py --stats                  # Show session stats only
+  python cli/main.py --recalibrate            # Recalibrate all models
+  python cli/main.py --recalibrate qwen2.5:0.5b  # Recalibrate specific model
 """
 
 import json
@@ -131,7 +133,7 @@ def check_and_calibrate(cfg: dict) -> dict:
         return cfg
 
     # Run calibration for uncalibrated models
-    from calibration.run_calibration import calibrate_model, acc_to_threshold, CAL_PATH
+    from calibration.run_calibration import calibrate_model, CAL_PATH
     if not CAL_PATH.exists():
         CONSOLE.print("[red]calibration_prompts.jsonl not found. Run: python calibration/extract_calibration_set.py[/red]")
         return cfg
@@ -144,12 +146,92 @@ def check_and_calibrate(cfg: dict) -> dict:
             continue
         result = calibrate_model(name, prompts)
         cfg.setdefault("models", {})[name] = result
-        # Save immediately after each model
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
         CONSOLE.print(f"  [green]Saved calibration for {name}[/green]")
 
+    # Offer recalibration of already-calibrated models
+    already_cal = [n for n in all_names if n in calibrated]
+    if already_cal:
+        CONSOLE.print()
+        redo = Confirm.ask(
+            f"  [dim]{len(already_cal)} model(s) already calibrated. Recalibrate any?[/dim]",
+            default=False
+        )
+        if redo:
+            for name in already_cal:
+                if Confirm.ask(f"  Recalibrate [cyan]{name}[/cyan]?", default=False):
+                    result = calibrate_model(name, prompts)
+                    cfg["models"][name] = result
+                    CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+                    CONSOLE.print(f"  [green]Recalibration saved for {name}[/green]")
+
     return cfg
+
+def recalibrate_model_flow(cfg: dict, target_model: str = None) -> dict:
+    """
+    Recalibrate one or all models.
+    If target_model is given, only recalibrate that model.
+    Otherwise, let user pick from a list.
+    """
+    from calibration.run_calibration import calibrate_model, CAL_PATH
+
+    if not CAL_PATH.exists():
+        CONSOLE.print("[red]calibration_prompts.jsonl not found.[/red]")
+        return cfg
+
+    running, detected = detect_ollama()
+    if not running or not detected:
+        CONSOLE.print("[yellow]Ollama not running.[/yellow]")
+        return cfg
+
+    all_names      = [m["name"] for m in detected]
+    calibrated     = cfg.get("models", {})
+    prompts        = [json.loads(l) for l in CAL_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    if target_model:
+        # Validate the model name
+        if target_model not in all_names:
+            CONSOLE.print(f"[red]Model '{target_model}' not found in Ollama. Available: {all_names}[/red]")
+            return cfg
+        to_recal = [target_model]
+    else:
+        # Show menu and let user pick
+        CONSOLE.print("\n  [bold]Which model to recalibrate?[/bold]")
+        sorted_names = sorted(all_names, key=lambda n: -score_model(n))
+        for i, name in enumerate(sorted_names):
+            status = f"(acc={calibrated[name]['calibration_acc']*100:.0f}%)" \
+                     if name in calibrated else "(not yet calibrated)"
+            CONSOLE.print(f"  [{i+1}] [cyan]{name}[/cyan]  {status}")
+        CONSOLE.print(f"  [{len(sorted_names)+1}] All models")
+        CONSOLE.print(f"  [{len(sorted_names)+2}] Cancel")
+
+        while True:
+            choice = Prompt.ask("  Choose", default="1")
+            try:
+                idx = int(choice) - 1
+                if idx == len(sorted_names):
+                    to_recal = sorted_names
+                    break
+                elif idx == len(sorted_names) + 1:
+                    return cfg
+                elif 0 <= idx < len(sorted_names):
+                    to_recal = [sorted_names[idx]]
+                    break
+            except ValueError:
+                pass
+            CONSOLE.print("  [red]Invalid choice.[/red]")
+
+    for name in to_recal:
+        CONSOLE.print(f"\n  Recalibrating [cyan]{name}[/cyan] with improved scorer...")
+        result = calibrate_model(name, prompts)
+        cfg.setdefault("models", {})[name] = result
+        CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+        CONSOLE.print(f"  [green]Saved: acc={result['calibration_acc']*100:.1f}%  "
+                      f"threshold={result['local_threshold']}[/green]")
+
+    return cfg
+
 
 def select_active_model(cfg: dict) -> str | None:
     """
@@ -419,12 +501,20 @@ def main():
 
     # Load config + detect + calibrate
     cfg = load_config()
-    cfg = check_and_calibrate(cfg)
 
-    # Pick active model
-    active_model = select_active_model(cfg)
-
-    session = load_session()
+    # Handle --recalibrate [model] flag BEFORE normal startup
+    if "--recalibrate" in args:
+        idx         = args.index("--recalibrate")
+        target      = args[idx + 1] if idx + 1 < len(args) and not args[idx+1].startswith("--") else None
+        cfg         = recalibrate_model_flow(cfg, target)
+        active_model = select_active_model(cfg)
+        session      = load_session()
+        CONSOLE.print("[green]Recalibration complete. Starting interactive mode...[/green]\n")
+        # Fall through to interactive mode with updated config
+    else:
+        cfg          = check_and_calibrate(cfg)
+        active_model = select_active_model(cfg)
+        session      = load_session()
 
     # Demo mode
     if "--demo" in args:
@@ -453,9 +543,13 @@ def main():
     CONSOLE.print()
     CONSOLE.print(Panel(
         "[bold]Interactive Mode[/bold]\n"
-        "Type your prompt and press Enter. Type [bold cyan]exit[/bold cyan] or [bold cyan]quit[/bold cyan] to stop.\n"
-        "Type [bold cyan]stats[/bold cyan] to see session summary. "
-        "Type [bold cyan]switch[/bold cyan] to change local model.",
+        "Type your prompt and press Enter to route it.\n\n"
+        "Commands:\n"
+        "  [bold cyan]stats[/bold cyan]                  -- session token summary\n"
+        "  [bold cyan]switch[/bold cyan]                 -- change active local model\n"
+        "  [bold cyan]recalibrate[/bold cyan]            -- recalibrate a model (pick from list)\n"
+        "  [bold cyan]recalibrate <model>[/bold cyan]    -- recalibrate a specific model\n"
+        "  [bold cyan]exit[/bold cyan] / [bold cyan]quit[/bold cyan]           -- exit",
         border_style="cyan", padding=(0, 2)
     ))
 
@@ -468,13 +562,25 @@ def main():
 
         if not prompt.strip():
             continue
-        if prompt.strip().lower() in ("exit", "quit", "q"):
+        cmd = prompt.strip().lower()
+        if cmd in ("exit", "quit", "q"):
             break
-        if prompt.strip().lower() == "stats":
+        if cmd == "stats":
             show_stats(session)
             continue
-        if prompt.strip().lower() == "switch":
+        if cmd == "switch":
             active_model = select_active_model(cfg)
+            continue
+        if cmd.startswith("recalibrate"):
+            parts       = prompt.strip().split(maxsplit=1)
+            target      = parts[1] if len(parts) > 1 else None
+            cfg         = recalibrate_model_flow(cfg, target)
+            # Refresh active model in case threshold changed
+            model_data  = cfg.get("models", {}).get(active_model, {})
+            if active_model and model_data:
+                new_thr = model_data.get("local_threshold", 1.0)
+                new_acc = model_data.get("calibration_acc", 0.0)
+                CONSOLE.print(f"  [green]Active model updated: acc={new_acc*100:.1f}%  threshold={new_thr}[/green]")
             continue
 
         route_prompt(prompt.strip(), active_model, cfg, session)

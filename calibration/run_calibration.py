@@ -51,12 +51,63 @@ def acc_to_threshold(acc: float) -> float:
 # Deterministic scorers (no Fireworks tokens)
 # ---------------------------------------------------------------------------
 def _extract_letter(text: str) -> str:
-    m = re.search(r"\b([A-D])\b", text.strip()[:300])
+    """
+    Smart MCQ answer extractor — handles verbose/step-by-step responses.
+    Priority order:
+      1. Explicit answer markers: 'answer is D', 'answer: D', 'correct answer is D'
+      2. Last standalone letter in the final 250 chars (the conclusion)
+      3. First standalone letter in first 300 chars (fallback)
+    """
+    t = text.strip()
+
+    # Priority 1: explicit answer/conclusion markers
+    explicit = [
+        r"(?:the\s+)?(?:correct\s+)?answer\s+is\s*[:\-]?\s*\**([A-D])\b",
+        r"(?:the\s+)?(?:correct\s+)?(?:answer|choice|option)\s*[:\-]\s*\**([A-D])\b",
+        r"\btherefore[,\s]+(?:the\s+)?(?:answer|choice|option)?\s*(?:is)?\s*\**([A-D])\b",
+        r"\bso[,\s]+(?:the\s+)?(?:answer)?\s*(?:is)?\s*\**([A-D])\b",
+        r"^\**([A-D])[\)\.]\s",                    # starts with "D. " or "D) "
+        r"\n\**([A-D])[\)\.]\s",                   # newline then "D. "
+        r"(?:select|choose|pick)\s+(?:option\s+)?\**([A-D])\b",
+    ]
+    for pat in explicit:
+        m = re.search(pat, t, re.IGNORECASE)
+        if m:
+            return m.group(1).upper()
+
+    # Priority 2: last standalone A-D letter in final 250 chars (usually the conclusion)
+    tail = t[-250:] if len(t) > 250 else t
+    matches = list(re.finditer(r"\b([A-D])\b", tail))
+    if matches:
+        return matches[-1].group(1).upper()
+
+    # Priority 3: first standalone A-D letter anywhere
+    m = re.search(r"\b([A-D])\b", t)
     return m.group(1).upper() if m else ""
 
 def _extract_number(text: str) -> str:
-    text = text.replace(",", "").replace("$", "")
-    nums = re.findall(r"-?\d+(?:\.\d+)?", text[-400:])
+    """
+    Extract the final numerical answer from math responses.
+    Looks for 'answer is X', '= X', or just the last number.
+    """
+    # Remove thousands commas and currency
+    clean = text.replace(",", "").replace("$", "").replace("\u00a0", " ")
+
+    # Priority 1: last '=' result (most reliable for step-by-step math)
+    eq_matches = list(re.finditer(r"=\s*(-?\d+(?:\.\d+)?)", clean[-600:]))
+    if eq_matches:
+        return eq_matches[-1].group(1)
+
+    # Priority 2: explicit answer markers (not 'total:' which is a label)
+    m = re.search(
+        r"(?:the\s+)?(?:answer|result|equals?)\s*(?:is)?[\s:=]+(-?\d+(?:\.\d+)?)",
+        clean[-600:], re.IGNORECASE
+    )
+    if m:
+        return m.group(1)
+
+    # Priority 3: last number in the final portion
+    nums = re.findall(r"-?\d+(?:\.\d+)?", clean[-400:])
     return nums[-1] if nums else ""
 
 def _score(response: str, reference: str, evaluator: str) -> bool:
