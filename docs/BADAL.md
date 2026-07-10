@@ -1,5 +1,5 @@
-# ⚙️ BADAL.md — Badal Patel's Task Breakdown
-### HybridRouter · AMD Developer Hackathon ACT III 2026
+﻿# ⚙️ BADAL.md — Badal Patel's Task Breakdown
+### HybridRouter · AMD Developer Hackathon ACT II 2026
 
 > You own the **tiny feature agent** and the **entire runtime**. Devansh handles the ML brain. You build everything that makes it run.
 

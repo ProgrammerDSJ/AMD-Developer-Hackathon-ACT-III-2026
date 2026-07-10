@@ -1,5 +1,5 @@
-# 🧠 HybridRouter — Hybrid Token-Efficient Routing Agent
-### AMD Developer Hackathon ACT III 2026 — Track 1
+﻿# 🧠 HybridRouter — Hybrid Token-Efficient Routing Agent
+### AMD Developer Hackathon ACT II 2026 — Track 1
 
 > **Goal:** Build an AI agent that completes a fixed set of tasks autonomously, deciding in real time which Fireworks AI model is the cheapest one that can still answer accurately. Minimize total Fireworks tokens without falling below the accuracy threshold.
 
@@ -28,7 +28,7 @@
 
 ## Project Overview
 
-**HybridRouter** is an intelligent model routing system built for the AMD Developer Hackathon ACT III 2026, Track 1: *Hybrid Token-Efficient Routing Agent*.
+**HybridRouter** is an intelligent model routing system built for the AMD Developer Hackathon ACT II 2026, Track 1: *Hybrid Token-Efficient Routing Agent*.
 
 The system answers the question: **"For any given prompt, what is the cheapest model that can still answer it accurately?"**
 
@@ -553,7 +553,7 @@ User Prompt
 | **Devansh Jhawar** | ML Routing Engine · Feature Extraction (hardcoded) · Router Training · Model Evaluation & Data Builder |
 | **Badal Patel** | Sub-0.6B Feature Agent (SmolLM) · Full Runtime · Model Clients (2 Remote Tiers) · App Orchestration |
 
-**Hackathon:** AMD Developer Hackathon ACT III 2026
+**Hackathon:** AMD Developer Hackathon ACT II 2026
 **Track:** Track 1 — Hybrid Token-Efficient Routing Agent
 **Scoring:** Token count (Fireworks only) + Output accuracy
 

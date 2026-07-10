@@ -1,4 +1,4 @@
-"""
+﻿"""
 cli/main.py  --  HybridRouter Unified Interactive CLI
 ------------------------------------------------------
 Usage:
@@ -486,7 +486,7 @@ def main():
     # Print banner
     CONSOLE.print(f"[bold cyan]{BANNER}[/bold cyan]")
     CONSOLE.print(Panel.fit(
-        "[bold]AMD Developer Hackathon ACT III 2026[/bold]  --  Token-Efficient LLM Routing\n"
+        "[bold]AMD Developer Hackathon ACT II 2026[/bold]  --  Token-Efficient LLM Routing\n"
         "[dim]Routes each prompt to the cheapest model that can answer it correctly.[/dim]",
         border_style="cyan"
     ))

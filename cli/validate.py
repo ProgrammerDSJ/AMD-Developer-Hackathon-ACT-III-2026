@@ -1,5 +1,5 @@
-import sys
-sys.path.insert(0, 'D:/Hackathon/AMD Developer Hackathon ACT III 2026')
+﻿import sys
+sys.path.insert(0, 'D:/Hackathon/AMD Developer Hackathon ACT II 2026')
 
 from calibration.run_calibration import load_config
 from inference_wrapper.feature_extractor import extract_features

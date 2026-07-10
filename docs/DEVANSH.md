@@ -1,5 +1,5 @@
-# 🧠 DEVANSH.md — Devansh Jhawar's Task Breakdown
-### HybridRouter · AMD Developer Hackathon ACT III 2026
+﻿# 🧠 DEVANSH.md — Devansh Jhawar's Task Breakdown
+### HybridRouter · AMD Developer Hackathon ACT II 2026
 
 > You own the **ML routing brain**. Your job is to build the system that learns which model is cheapest for any prompt — and prove it with data. Badal handles the runtime. You handle the intelligence behind every routing decision.
 

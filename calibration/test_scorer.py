@@ -1,6 +1,6 @@
-"""Quick test of the improved MCQ and math extractors."""
+﻿"""Quick test of the improved MCQ and math extractors."""
 import sys
-sys.path.insert(0, 'D:/Hackathon/AMD Developer Hackathon ACT III 2026')
+sys.path.insert(0, 'D:/Hackathon/AMD Developer Hackathon ACT II 2026')
 
 from calibration.run_calibration import _extract_letter, _extract_number
 
