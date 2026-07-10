@@ -670,7 +670,7 @@ User Prompt
 | **Devansh Jhawar** | ML Routing Engine · Feature Extraction (hardcoded) · Router Training · Model Evaluation & Data Builder |
 | **Badal Patel** | Sub-0.6B Feature Agent · Full Runtime · Model Clients (Local + 3 Remote Tiers) · App Orchestration |
 
-**Hackathon:** AMD Developer Hackathon ACT III 2026
+**Hackathon:** AMD Developer Hackathon ACT II 2026
 **Track:** Track 1 — Hybrid Token-Efficient Routing Agent
 **Scoring:** Token count (Fireworks only) + Output accuracy
 
