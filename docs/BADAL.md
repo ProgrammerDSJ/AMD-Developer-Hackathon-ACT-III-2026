@@ -9,8 +9,8 @@
 
 | Area | What You Build |
 |------|---------------|
-| Sub-0.6B Feature Agent | Tiny local LLM extracting nuanced prompt features |
-| Model Clients | Ollama (local) + 3 Fireworks remote tier clients |
+| Sub-0.6B Feature Agent | SmolLM-360M extracting nuanced prompt features |
+| Model Clients | 2 Fireworks remote tier clients (Tier 1 + Tier 2) |
 | Feature Pipeline | Unified wiring of hardcoded + LLM features |
 | Runtime Orchestration | End-to-end pipeline from prompt to final answer |
 | App Interface | What judges interact with |
@@ -78,11 +78,11 @@ JSON only:
 
 ---
 
-## Task 2 — Model Clients (Local + 3 Remote Tiers)
+## Task 2 — Model Clients (2 Remote Tiers)
 
 **File:** `inference_wrapper/model_clients.py`
 
-All 4 clients implement the same interface so the router can call them interchangeably.
+Both clients implement the same interface so the router can call them interchangeably.
 
 ### Base interface
 
@@ -94,28 +94,19 @@ class BaseModelClient:
         raise NotImplementedError
 ```
 
-### Client 1 — Local (Ollama, 0 Fireworks tokens)
+### Client 1 — Tier 1 (Fireworks, cheap)
 
-- **Model:** `llama3.2:3b` or `qwen2.5:3b`
-- **How:** HTTP to `http://localhost:11434/api/generate`
-- **Fallback:** if Ollama is offline, `is_available()` returns `False`
+- **Model:** `accounts/fireworks/models/gpt-oss-20b`
+- **Use case:** Math, MCQ, code, simple factual Q&A
+- **Typical tokens:** 200-600
 
-### Client 2 — Tier 1 Low (Fireworks)
+### Client 2 — Tier 2 (Fireworks, powerful)
 
-- **Model:** `accounts/fireworks/models/llama-v3p1-8b-instruct`
-- **Use case:** Simple Q&A, classification
+- **Model:** `accounts/fireworks/models/glm-5p2`
+- **Use case:** Complex reasoning, open-ended, creative tasks
+- **Typical tokens:** 500-1500
 
-### Client 3 — Tier 2 Mid (Fireworks)
-
-- **Model:** `accounts/fireworks/models/llama-v3p1-70b-instruct`
-- **Use case:** Multi-step reasoning, moderate complexity
-
-### Client 4 — Tier 3 High (Fireworks)
-
-- **Model:** `accounts/fireworks/models/deepseek-r1` (confirm from hackathon list)
-- **Use case:** Hard math, complex code, research-level reasoning
-
-### Fireworks base (Tiers 1–3 share this)
+### Fireworks base (both tiers share this)
 
 ```python
 from openai import OpenAI
@@ -139,7 +130,7 @@ class FireworksClient(BaseModelClient):
 
 ### Requirements
 
-- [ ] All 4 clients implement `BaseModelClient`
+- [ ] Both clients implement `BaseModelClient`
 - [ ] API keys loaded from env vars — never hardcoded
 - [ ] Log token usage after every Fireworks call
 - [ ] Expose factory: `get_client(tier: str) -> BaseModelClient`
@@ -200,17 +191,16 @@ Return answer + metadata
 def route_and_answer(prompt: str) -> dict:
     return {
         "answer": str,           # final response text
-        "tier_used": str,        # "local" / "tier1" / "tier2" / "tier3"
-        "confidence": float,     # router's confidence score
-        "fireworks_tokens": int  # 0 if local
+        "tier_used": str,        # "tier1" (gpt-oss-20b) or "tier2" (glm-5p2)
+        "confidence": float,     # router's confidence score (prob of tier1)
+        "fireworks_tokens": int  # tokens used by whichever tier answered
     }
 ```
 
 ### Requirements
 
-- [ ] Load `router_model.pkl` once at startup
-- [ ] Load all 4 clients once at startup
-- [ ] Check `LocalModelClient.is_available()` before routing local
+- [ ] Load `router_model.joblib` once at startup
+- [ ] Load both tier clients once at startup
 - [ ] Log every routing decision (prompt hash, tier, confidence, tokens)
 - [ ] CLI mode: `python router_wrapper.py --prompt "..."`
 - [ ] Batch mode: `python router_wrapper.py --eval-set tasks.jsonl --output results.jsonl`
@@ -280,8 +270,8 @@ HybridRouter/
 |---------------------------|------|
 | `hardcoded_features.py` | Before Task 3 |
 | `feature_schema.json` (column order) | Before Task 3 — agree on this first |
-| `router_model.pkl` | Before Task 4 |
-| Confirmed Fireworks model names | Before Task 2 |
+| `router_model.joblib` | Before Task 4 |
+| Confirmed Fireworks model names | Tier1=gpt-oss-20b, Tier2=glm-5p2 |
 
 > **Agree on `feature_schema.json` column names and order before either of you writes code.** This is the critical interface between your runtime and Devansh's ML router.
 
@@ -289,12 +279,12 @@ HybridRouter/
 
 ## ✅ Full Task Checklist
 
-- [ ] **Task 1:** `llm_features.py` — extract 6 LLM features, JSON fallback, < 300ms
-- [ ] **Task 2:** `model_clients.py` — 4 clients, shared interface, token logging
+- [ ] **Task 1:** `llm_features.py` — extract 5 LLM features, JSON fallback, < 300ms
+- [ ] **Task 2:** `model_clients.py` — 2 Fireworks clients (Tier1+Tier2), shared interface, token logging
 - [ ] **Task 3:** `feature_pipeline.py` — merged vector, correct column order
-- [ ] **Task 4:** `router_wrapper.py` — full routing flow, CLI + batch mode
+- [ ] **Task 4:** `router_wrapper.py` — binary routing flow (tier1/tier2), CLI + batch mode
 - [ ] **Task 5:** `Dockerfile` — builds, runs, < 60s startup
-- [ ] End-to-end test: run a batch of 10 prompts through the full container
+- [ ] End-to-end test: run a batch of 10 prompts through the full system
 - [ ] Coordinate `feature_schema.json` with Devansh before writing Tasks 3 & 4
 
 ---
