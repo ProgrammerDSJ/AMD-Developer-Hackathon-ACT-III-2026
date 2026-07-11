@@ -37,16 +37,18 @@ LEVELS    = ["L1", "L2", "L3", "L4"]
 
 # Source → domain mapping (from calibration_prompts.jsonl sources)
 SOURCE_TO_DOMAIN: Dict[str, str] = {
-    "mmlu":       "factual",
-    "arc":        "factual",
-    "gsm8k":      "math",
-    "humaneval":  "code",
-    "truthfulqa": "language",
-    "math_hard":  "math",
-    "leetcode":   "code",
-    "musique":    "reasoning",
-    "hotpotqa":   "reasoning",
-    "ifeval":     "instruction",
+    "mmlu":         "factual",
+    "arc":          "factual",
+    "gsm8k":        "math",
+    "humaneval":    "code",
+    "truthfulqa":   "language",
+    "math_hard":    "math",
+    "math_l1":      "math",
+    "leetcode":     "code",
+    "musique":      "reasoning",
+    "hotpotqa":     "reasoning",
+    "ifeval":       "instruction",
+    "language_mcq": "language",   # grammar / translation / paraphrase MCQ
 }
 
 # Routing confidence floor: model must score >= this at a (domain, level)

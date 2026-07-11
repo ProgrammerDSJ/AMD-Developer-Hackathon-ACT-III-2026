@@ -52,17 +52,155 @@ def acc_to_threshold(acc: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Per-(evaluator, difficulty) calibration config
+# System prompts constrain output format so extractors are reliable.
+# Max tokens are sized to the expected response length.
+# ---------------------------------------------------------------------------
+CALIBRATION_CONFIG = {
+    # ── MCQ (just the letter for L1/L2; anchor marker for L3/L4) ──────────
+    ("mcq", "L1"): {
+        "system":     "Answer with ONLY the single letter A, B, C, or D. Nothing else.",
+        "max_tokens": 8,
+    },
+    ("mcq", "L2"): {
+        "system":     "Answer with ONLY the single letter A, B, C, or D. Nothing else.",
+        "max_tokens": 8,
+    },
+    ("mcq", "L3"): {
+        "system":     (
+            "Think briefly about the question, then end your response with exactly:\n"
+            "Answer: X\n"
+            "where X is the single correct letter (A, B, C, or D)."
+        ),
+        "max_tokens": 150,
+    },
+    ("mcq", "L4"): {
+        "system":     (
+            "Reason step by step, then end your response with exactly:\n"
+            "Answer: X\n"
+            "where X is the single correct letter (A, B, C, or D)."
+        ),
+        "max_tokens": 300,
+    },
+    # ── Math (bare number for L1/L2; anchor marker for L3/L4) ─────────────
+    ("math", "L1"): {
+        "system":     "Output ONLY the final number. No units, no work, no explanation.",
+        "max_tokens": 16,
+    },
+    ("math", "L2"): {
+        "system":     "Output ONLY the final number. No units, no work, no explanation.",
+        "max_tokens": 32,
+    },
+    ("math", "L3"): {
+        "system":     (
+            "Solve step by step. End your response with exactly:\n"
+            "Answer: [number]\n"
+            "where [number] is the final numerical answer only."
+        ),
+        "max_tokens": 300,
+    },
+    ("math", "L4"): {
+        "system":     (
+            "Show all reasoning steps clearly. End your response with exactly:\n"
+            "Answer: [number]\n"
+            "where [number] is the final numerical answer only."
+        ),
+        "max_tokens": 512,
+    },
+    # ── Code ───────────────────────────────────────────────────────────────
+    ("code", "L1"): {
+        "system":     (
+            "Provide a complete, working Python function. "
+            "Include the def line and all necessary logic. No prose outside the code."
+        ),
+        "max_tokens": 256,
+    },
+    ("code", "L2"): {
+        "system":     (
+            "Provide a complete, working Python function. "
+            "Include the def line and all necessary logic. No prose outside the code."
+        ),
+        "max_tokens": 384,
+    },
+    ("code", "L3"): {
+        "system":     (
+            "Provide a complete, working Python function implementation. "
+            "Include the def line, all logic, and handle edge cases."
+        ),
+        "max_tokens": 512,
+    },
+    ("code", "L4"): {
+        "system":     (
+            "Think through your approach briefly, then provide a complete, "
+            "working function implementation with the def line."
+        ),
+        "max_tokens": 512,
+    },
+    # ── Keyword / instruction (substring match) ──────────────────────────────────
+    ("keyword", "L1"): {
+        "system":     "Answer directly and concisely. One sentence maximum.",
+        "max_tokens": 32,
+    },
+    ("keyword", "L2"): {
+        "system":     "Answer directly and factually. 1-2 sentences.",
+        "max_tokens": 64,
+    },
+    ("keyword", "L3"): {
+        "system":     "Answer accurately and completely. 2-3 sentences.",
+        "max_tokens": 96,
+    },
+    ("keyword", "L4"): {
+        "system":     "Answer thoroughly with necessary detail.",
+        "max_tokens": 128,
+    },
+    # MCQ keyword (legacy alias — same as keyword)
+    ("mcq_keyword", "L1"): {
+        "system":     "Answer directly and concisely. One sentence maximum.",
+        "max_tokens": 32,
+    },
+    ("mcq_keyword", "L2"): {
+        "system":     "Answer directly and factually. 1-2 sentences.",
+        "max_tokens": 64,
+    },
+    ("mcq_keyword", "L3"): {
+        "system":     "Answer accurately with relevant context. 2-3 sentences.",
+        "max_tokens": 96,
+    },
+    ("mcq_keyword", "L4"): {
+        "system":     "Answer thoughtfully with necessary context.",
+        "max_tokens": 128,
+    },
+}
+
+# Fallback for any (evaluator, level) combination not in the table
+CALIBRATION_DEFAULT = {
+    "system":     "Answer concisely and accurately.",
+    "max_tokens": 128,
+}
+
+
+# ---------------------------------------------------------------------------
 # Deterministic scorers (no Fireworks tokens)
 # ---------------------------------------------------------------------------
 def _extract_letter(text: str) -> str:
     """
     Smart MCQ answer extractor — handles verbose/step-by-step responses.
     Priority order:
+      0. [NEW] Explicit 'Answer: X' anchor injected by our system prompt
       1. Explicit answer markers: 'answer is D', 'answer: D', 'correct answer is D'
       2. Last standalone letter in the final 250 chars (the conclusion)
       3. First standalone letter in first 300 chars (fallback)
     """
     t = text.strip()
+
+    # Priority 0: our system-prompt anchor 'Answer: X' on its own line
+    # This is the most reliable signal for L3/L4 reasoning-chain responses.
+    anchor = re.search(
+        r"(?:^|\n)\s*Answer:\s*\**([A-D])\b",
+        t, re.IGNORECASE | re.MULTILINE
+    )
+    if anchor:
+        return anchor.group(1).upper()
 
     # Priority 1: explicit answer/conclusion markers
     explicit = [
@@ -92,17 +230,34 @@ def _extract_letter(text: str) -> str:
 def _extract_number(text: str) -> str:
     """
     Extract the final numerical answer from math responses.
-    Looks for 'answer is X', '= X', or just the last number.
+    Priority order:
+      0. [NEW] Explicit 'Answer: X' anchor injected by our system prompt
+      1. Last '=' result (most reliable for step-by-step math)
+      2. Explicit answer markers
+      3. Last number in response tail
     """
     # Remove thousands commas and currency
     clean = text.replace(",", "").replace("$", "").replace("\u00a0", " ")
+
+    # Priority 0: our system-prompt anchor 'Answer: [number]'
+    # This is the most reliable signal for L3/L4 with reasoning chains.
+    anchor = re.search(
+        r"(?:^|\n)\s*Answer:\s*(-?\d+(?:[./]\d+)?)",
+        clean, re.IGNORECASE | re.MULTILINE
+    )
+    if anchor:
+        val = anchor.group(1)
+        # Handle simple fractions like 105/512
+        if "/" in val:
+            return val  # return as-is; comparator handles fraction strings
+        return val
 
     # Priority 1: last '=' result (most reliable for step-by-step math)
     eq_matches = list(re.finditer(r"=\s*(-?\d+(?:\.\d+)?)", clean[-600:]))
     if eq_matches:
         return eq_matches[-1].group(1)
 
-    # Priority 2: explicit answer markers (not 'total:' which is a label)
+    # Priority 2: explicit answer markers
     m = re.search(
         r"(?:the\s+)?(?:answer|result|equals?)\s*(?:is)?[\s:=]+(-?\d+(?:\.\d+)?)",
         clean[-600:], re.IGNORECASE
@@ -116,33 +271,46 @@ def _extract_number(text: str) -> str:
 
 def _score(response: str, reference: str, evaluator: str) -> bool:
     r = response.strip()
-    if evaluator in ("mcq", "mcq_keyword"):
+    if evaluator == "mcq":
         got = _extract_letter(r)
         exp = _extract_letter(reference) or reference.strip().upper()
         return bool(got) and got == exp
+    elif evaluator == "keyword":
+        # Substring match: check the reference keyword appears in the response.
+        # Used for instruction-following and open-ended tasks where the answer
+        # is a word/phrase, NOT a multiple-choice letter.
+        keyword = reference.strip().lower()
+        return bool(keyword) and keyword in r.lower()
+    elif evaluator == "mcq_keyword":
+        # Legacy alias for keyword (backward compat with older prompts)
+        keyword = reference.strip().lower()
+        # If reference looks like a single letter A-D, treat as MCQ
+        if len(keyword) == 1 and keyword in "abcd":
+            got = _extract_letter(r)
+            return bool(got) and got == keyword.upper()
+        return bool(keyword) and keyword in r.lower()
     elif evaluator == "math":
         got, exp = _extract_number(r), _extract_number(reference)
+        # Handle fraction strings (e.g. "105/512")
+        if "/" in reference:
+            ref_str = reference.strip().lower()
+            return ref_str in r.lower()
         try:
-            # Explicitly wrap in bool() — Python's 'and' returns the last evaluated
-            # operand, not True/False, so "" and exp returns "" not False.
             return bool(got and exp and abs(float(got) - float(exp)) < 0.02)
         except Exception:
             return bool(got == exp)
     elif evaluator == "code":
         # Require a real function definition with a non-trivial body.
-        # Rule out: no-code cop-out phrases
         cop_out = any(phrase in r.lower() for phrase in [
             "i cannot", "i can't", "i don't know", "sorry, i",
             "as an ai", "i'm unable", "i am unable",
         ])
         if cop_out:
             return False
-        # Must have a function definition AND a return/yield
         has_def    = "def " in r
         has_return = "return " in r or "yield " in r
         if not (has_def and has_return):
             return False
-        # Must have a non-trivial body: at least 3 lines of code OR 80+ chars of code
         code_lines = [l for l in r.split("\n") if l.strip() and not l.strip().startswith("#")]
         has_substance = len(code_lines) >= 3 or len(r.strip()) >= 80
         return has_substance
@@ -182,7 +350,16 @@ def calibrate_model(model_name: str, prompts: list) -> dict:
             difficulty = p.get("difficulty", "L2")   # default L2 for old prompts
             domain     = SOURCE_TO_DOMAIN.get(src, "factual")
 
-            resp, _ = generate(p["prompt"], model_name, max_tokens=128)
+            # Get format-constraining system prompt + token budget for this probe
+            evaluator  = p["evaluator"]
+            cal_cfg    = CALIBRATION_CONFIG.get(
+                (evaluator, difficulty), CALIBRATION_DEFAULT
+            )
+            resp, _ = generate(
+                p["prompt"], model_name,
+                max_tokens=cal_cfg["max_tokens"],
+                system=cal_cfg["system"],
+            )
             ok = bool(_score(resp, p["reference"], p["evaluator"]))
             if ok:
                 correct += 1
