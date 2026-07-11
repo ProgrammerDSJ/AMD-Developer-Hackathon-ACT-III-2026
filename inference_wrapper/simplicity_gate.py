@@ -1,14 +1,19 @@
 """
-inference_wrapper/simplicity_gate.py  --  Gate 0: Simplicity Pre-Filter
-------------------------------------------------------------------------
+inference_wrapper/simplicity_gate.py  --  Gate 0: Capability-Aware Router
+--------------------------------------------------------------------------
 Decides if a prompt is simple enough for the local model.
-Three improvements over v1:
-  1. Four "always-local" categories (arithmetic, ultra-short, conversational, definitional)
-  2. Calibration-aware threshold (stronger model = more aggressive local routing)
-  3. Per-category source-stats check (model's known weakness blocks local routing)
 
-Signature:
-  is_trivially_simple(prompt, feats, model_acc=0.0, source_stats=None)
+Routing path (in order):
+  1. Always-local categories (arithmetic, greetings, ultra-short)
+  2. [NEW] If a CapabilityProfile is available: classify prompt into
+     (domain, difficulty level), look up measured model accuracy for
+     that cell, and route local/remote accordingly.
+  3. Legacy heuristic path (for uncalibrated models):
+     keyword/length scoring with calibration_acc threshold.
+
+Public API:
+  is_trivially_simple(prompt, feats, model_acc=0.0, source_stats=None,
+                      capability_profile=None)
   -> (is_simple: bool, reason: str, confidence: float)
 """
 
@@ -108,9 +113,20 @@ def is_trivially_simple(
     feats: dict,
     model_acc: float = 0.0,
     source_stats: dict | None = None,
+    capability_profile=None,   # calibration.profile.CapabilityProfile | None
 ) -> tuple[bool, str, float]:
     """
     Gate 0 decision using pre-extracted features.
+
+    Args:
+        prompt:             Raw user prompt.
+        feats:              Feature dict from feature_extractor.extract_features().
+        model_acc:          Overall calibration accuracy (legacy scalar).
+        source_stats:       Per-source accuracy dict (legacy).
+        capability_profile: CapabilityProfile object (new system). When present,
+                            overrides the legacy heuristic for non-trivial prompts.
+    Returns:
+        (is_simple, reason, confidence)
     """
     p     = prompt.strip()
     lower = p.lower().strip("?!. ")
@@ -136,7 +152,21 @@ def is_trivially_simple(
     if n <= 4 and not has_code_feat and not has_math_feat and not has_mcq_feat:
         return True, f"Ultra-short ({n} words) -- always local", 0.95
 
-    # ── Hard blockers: always remote ──────────────────────────────────────
+    # ── [NEW] Profile-aware path ──────────────────────────────────────────
+    # When a CapabilityProfile exists for the active model, use it to make
+    # the routing decision based on measured (domain, level) accuracy.
+    if capability_profile is not None:
+        from inference_wrapper.difficulty_classifier import classify
+        result = classify(p, feats)
+        local, reason = capability_profile.should_route_local(result.domain, result.level)
+        profile_reason = (
+            f"Profile [{result.domain}/{result.level}, conf={result.confidence:.2f}]: "
+            + reason
+        )
+        return local, profile_reason, result.confidence
+
+    # ── Legacy heuristic path (no profile / uncalibrated model) ──────────
+    # Hard blockers: always remote
     if n > 25:
         return False, f"Too long ({n} words > 25)", 0.0
 
@@ -158,7 +188,7 @@ def is_trivially_simple(
     if m:
         return False, f"Abstract/hard topic: '{m.group()}'", 0.20
 
-    # ── Category 4: Definitional (threshold depends on model quality) ─────
+    # Category 4: Definitional (threshold depends on model quality)
     starts_simple = any(lower.startswith(pfx) for pfx in _SIMPLE_PREFIXES)
     is_short      = n <= 12
     single_sent   = feats.get("num_sentences", 1) <= 1
