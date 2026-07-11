@@ -136,22 +136,39 @@ CALIBRATION_CONFIG = {
         ),
         "max_tokens": 512,
     },
-    # ── MCQ keyword (short factual answers) ───────────────────────────────
-    ("mcq_keyword", "L1"): {
-        "system":     "Answer directly and factually in 1-2 sentences. Be concise.",
+    # ── Keyword / instruction (substring match) ──────────────────────────────────
+    ("keyword", "L1"): {
+        "system":     "Answer directly and concisely. One sentence maximum.",
+        "max_tokens": 32,
+    },
+    ("keyword", "L2"): {
+        "system":     "Answer directly and factually. 1-2 sentences.",
         "max_tokens": 64,
     },
-    ("mcq_keyword", "L2"): {
-        "system":     "Answer directly and factually in 2-3 sentences.",
+    ("keyword", "L3"): {
+        "system":     "Answer accurately and completely. 2-3 sentences.",
         "max_tokens": 96,
     },
-    ("mcq_keyword", "L3"): {
-        "system":     "Answer accurately with relevant context. 3-4 sentences.",
+    ("keyword", "L4"): {
+        "system":     "Answer thoroughly with necessary detail.",
         "max_tokens": 128,
     },
+    # MCQ keyword (legacy alias — same as keyword)
+    ("mcq_keyword", "L1"): {
+        "system":     "Answer directly and concisely. One sentence maximum.",
+        "max_tokens": 32,
+    },
+    ("mcq_keyword", "L2"): {
+        "system":     "Answer directly and factually. 1-2 sentences.",
+        "max_tokens": 64,
+    },
+    ("mcq_keyword", "L3"): {
+        "system":     "Answer accurately with relevant context. 2-3 sentences.",
+        "max_tokens": 96,
+    },
     ("mcq_keyword", "L4"): {
-        "system":     "Answer thoughtfully with necessary context. 4-5 sentences.",
-        "max_tokens": 192,
+        "system":     "Answer thoughtfully with necessary context.",
+        "max_tokens": 128,
     },
 }
 
@@ -254,33 +271,46 @@ def _extract_number(text: str) -> str:
 
 def _score(response: str, reference: str, evaluator: str) -> bool:
     r = response.strip()
-    if evaluator in ("mcq", "mcq_keyword"):
+    if evaluator == "mcq":
         got = _extract_letter(r)
         exp = _extract_letter(reference) or reference.strip().upper()
         return bool(got) and got == exp
+    elif evaluator == "keyword":
+        # Substring match: check the reference keyword appears in the response.
+        # Used for instruction-following and open-ended tasks where the answer
+        # is a word/phrase, NOT a multiple-choice letter.
+        keyword = reference.strip().lower()
+        return bool(keyword) and keyword in r.lower()
+    elif evaluator == "mcq_keyword":
+        # Legacy alias for keyword (backward compat with older prompts)
+        keyword = reference.strip().lower()
+        # If reference looks like a single letter A-D, treat as MCQ
+        if len(keyword) == 1 and keyword in "abcd":
+            got = _extract_letter(r)
+            return bool(got) and got == keyword.upper()
+        return bool(keyword) and keyword in r.lower()
     elif evaluator == "math":
         got, exp = _extract_number(r), _extract_number(reference)
+        # Handle fraction strings (e.g. "105/512")
+        if "/" in reference:
+            ref_str = reference.strip().lower()
+            return ref_str in r.lower()
         try:
-            # Explicitly wrap in bool() — Python's 'and' returns the last evaluated
-            # operand, not True/False, so "" and exp returns "" not False.
             return bool(got and exp and abs(float(got) - float(exp)) < 0.02)
         except Exception:
             return bool(got == exp)
     elif evaluator == "code":
         # Require a real function definition with a non-trivial body.
-        # Rule out: no-code cop-out phrases
         cop_out = any(phrase in r.lower() for phrase in [
             "i cannot", "i can't", "i don't know", "sorry, i",
             "as an ai", "i'm unable", "i am unable",
         ])
         if cop_out:
             return False
-        # Must have a function definition AND a return/yield
         has_def    = "def " in r
         has_return = "return " in r or "yield " in r
         if not (has_def and has_return):
             return False
-        # Must have a non-trivial body: at least 3 lines of code OR 80+ chars of code
         code_lines = [l for l in r.split("\n") if l.strip() and not l.strip().startswith("#")]
         has_substance = len(code_lines) >= 3 or len(r.strip()) >= 80
         return has_substance
