@@ -14,6 +14,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from collections import defaultdict
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -26,6 +27,9 @@ from rich          import box
 from rich.prompt   import Confirm
 
 from inference_wrapper.local_client import detect_ollama, score_model, generate
+from calibration.profile import (
+    CapabilityProfile, SOURCE_TO_DOMAIN, LEVELS, save_profile
+)
 
 CONSOLE     = Console()
 CONFIG_PATH = Path.home() / ".hybridrouter" / "config.json"
@@ -150,11 +154,18 @@ def _score(response: str, reference: str, evaluator: str) -> bool:
 # Calibrate one model
 # ---------------------------------------------------------------------------
 def calibrate_model(model_name: str, prompts: list) -> dict:
-    """Run 100 calibration prompts through one model. Returns stats dict."""
+    """
+    Run calibration prompts through one model.
+    Builds a 2D CapabilityProfile (domain x difficulty level) in addition
+    to the legacy flat accuracy stats for backward compatibility.
+    Returns stats dict suitable for storage in config.json.
+    """
     CONSOLE.print(f"\n[bold cyan]Calibrating:[/bold cyan] [white]{model_name}[/white]")
 
     correct = 0
     source_stats = {}
+    # 2D tracker: (domain, level) -> {n, c}
+    domain_level_stats: dict = defaultdict(lambda: {"n": 0, "c": 0})
 
     with Progress(
         SpinnerColumn(),
@@ -167,50 +178,103 @@ def calibrate_model(model_name: str, prompts: list) -> dict:
     ) as prog:
         task = prog.add_task("Running", total=len(prompts), status="")
         for i, p in enumerate(prompts):
-            src = p["source"]
+            src        = p["source"]
+            difficulty = p.get("difficulty", "L2")   # default L2 for old prompts
+            domain     = SOURCE_TO_DOMAIN.get(src, "factual")
+
             resp, _ = generate(p["prompt"], model_name, max_tokens=128)
             ok = bool(_score(resp, p["reference"], p["evaluator"]))
             if ok:
                 correct += 1
+
+            # Per-source (legacy)
             source_stats.setdefault(src, {"n": 0, "c": 0})
             source_stats[src]["n"] += 1
             source_stats[src]["c"] += 1 if ok else 0
+
+            # Per (domain, level)
+            key = (domain, difficulty)
+            domain_level_stats[key]["n"] += 1
+            domain_level_stats[key]["c"] += 1 if ok else 0
+
             prog.update(task, advance=1,
-                        status=f"{correct}/{i+1} correct ({src})")
+                        status=f"{correct}/{i+1} correct ({src}/{difficulty})")
 
     acc       = correct / len(prompts)
     threshold = acc_to_threshold(acc)
 
-    # Per-source breakdown table
+    # ── Per-source breakdown table (legacy display) ───────────────────────
     rt = Table(box=box.SIMPLE, show_header=True, header_style="bold")
-    rt.add_column("Source",   style="dim", width=14)
-    rt.add_column("Correct",  justify="right", width=8)
-    rt.add_column("Total",    justify="right", width=8)
-    rt.add_column("Accuracy", justify="right", width=10)
-    for src, s in source_stats.items():
+    rt.add_column("Source",     style="dim", width=14)
+    rt.add_column("Difficulty", style="dim", width=10)
+    rt.add_column("Correct",    justify="right", width=8)
+    rt.add_column("Total",      justify="right", width=8)
+    rt.add_column("Accuracy",   justify="right", width=10)
+    for (dom, lv), s in sorted(domain_level_stats.items()):
+        if s["n"] == 0:
+            continue
         pct   = s["c"] / s["n"] * 100
         color = "green" if pct >= 70 else "yellow" if pct >= 50 else "red"
-        rt.add_row(src, str(s["c"]), str(s["n"]),
+        rt.add_row(dom, lv, str(s["c"]), str(s["n"]),
                    f"[{color}]{pct:.0f}%[/{color}]")
-    rt.add_row("[bold]TOTAL[/bold]", str(correct), str(len(prompts)),
+    rt.add_row("[bold]TOTAL[/bold]", "", str(correct), str(len(prompts)),
                f"[bold cyan]{acc*100:.1f}%[/bold cyan]")
     CONSOLE.print(rt)
 
     CONSOLE.print(
         f"  [bold]Result:[/bold] accuracy=[cyan]{acc*100:.1f}%[/cyan]  "
-        f"threshold=[green]{threshold:.2f}[/green]  "
-        f"(routes locally when tier1_prob >= {threshold:.2f})"
+        f"threshold=[green]{threshold:.2f}[/green]"
     )
 
-    return {
-        "calibration_acc": round(acc, 4),
-        "local_threshold": round(threshold, 4),
-        "capability_score": score_model(model_name),
-        "source_stats": {k: {"acc": round(v["c"]/v["n"], 3)}
-                         for k, v in source_stats.items()},
-        "calibrated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "prompts_run": len(prompts),
+    # ── Build CapabilityProfile ───────────────────────────────────────────
+    profile = CapabilityProfile(model_name=model_name)
+    from calibration.profile import DOMAINS
+    for domain in DOMAINS:
+        for lv in LEVELS:
+            key = (domain, lv)
+            s   = domain_level_stats.get(key)
+            if s and s["n"] >= 2:   # need at least 2 samples to trust the score
+                profile.acc[domain][lv] = round(s["c"] / s["n"], 3)
+            else:
+                profile.acc[domain][lv] = None  # unmeasured
+
+    # For unmeasured cells, bootstrap from overall acc as a conservative estimate
+    for domain in DOMAINS:
+        for lv in LEVELS:
+            if profile.acc[domain][lv] is None:
+                # Use source_stats if we have a matching domain source
+                src_acc = None
+                for src, dom in SOURCE_TO_DOMAIN.items():
+                    if dom == domain and src in source_stats:
+                        src_acc = source_stats[src]["acc"] if "acc" in source_stats[src] \
+                                  else source_stats[src]["c"] / max(source_stats[src]["n"], 1)
+                        break
+                base = src_acc if src_acc is not None else acc
+                # Apply decay by level
+                decay = {"L1": 0.20, "L2": 0.08, "L3": -0.12, "L4": -0.38}
+                profile.acc[domain][lv] = round(
+                    max(0.0, min(1.0, base + decay.get(lv, 0))), 3
+                )
+
+    CONSOLE.print(f"  [dim]Capability profile built: {profile.summary()}[/dim]")
+
+    # Compile scalar source_stats for legacy compat
+    src_stats_out = {
+        k: {"acc": round(v["c"] / max(v["n"], 1), 3)}
+        for k, v in source_stats.items()
     }
+
+    result = {
+        "calibration_acc":  round(acc, 4),
+        "local_threshold":  round(threshold, 4),
+        "capability_score": score_model(model_name),
+        "source_stats":     src_stats_out,
+        "calibrated_at":    time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "prompts_run":      len(prompts),
+    }
+    # Merge capability_profile and routing_thresholds into result
+    result.update(profile.to_dict())
+    return result
 
 
 # ---------------------------------------------------------------------------

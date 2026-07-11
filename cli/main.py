@@ -35,6 +35,7 @@ from inference_wrapper.router_core       import predict
 from inference_wrapper.simplicity_gate   import is_trivially_simple
 from inference_wrapper.local_client      import detect_ollama, score_model, generate as local_gen
 from inference_wrapper.fireworks_client  import call_tier, TIER_DISPLAY
+from calibration.profile                 import load_profile
 
 CONSOLE     = Console()
 CONFIG_PATH = Path.home() / ".hybridrouter" / "config.json"
@@ -312,10 +313,13 @@ def route_prompt(prompt: str, active_model: str | None,
     feats = extract_features(prompt)
     fms = (time.time() - t_feat_start) * 1000
 
+    # Load capability profile for active model (None if not calibrated)
+    capability_profile = load_profile(active_model) if active_model else None
+
     # =========================================================================
     # STEP 1: Gate 0 -- Simplicity Pre-Filter
     # =========================================================================
-    CONSOLE.print(Rule("[bold green]Step 1  Gate 0 -- Simplicity Pre-Filter[/bold green]", style="green"))
+    CONSOLE.print(Rule("[bold green]Step 1  Gate 0 -- Capability-Aware Routing[/bold green]", style="green"))
 
     # Compute model context first, then call gate
     has_local  = bool(active_model and cfg.get("models", {}).get(active_model))
@@ -329,18 +333,30 @@ def route_prompt(prompt: str, active_model: str | None,
 
     t0 = time.time()
     is_simple, gate_reason, gate_conf = is_trivially_simple(
-        prompt, feats, model_acc, src_stats if has_local else None
+        prompt, feats, model_acc,
+        src_stats if has_local else None,
+        capability_profile=capability_profile if has_local else None,
     )
     gms = (time.time() - t0) * 1000
 
+    # Detect which routing path was used
+    using_profile = (capability_profile is not None and has_local
+                     and gate_reason.startswith("Profile ["))
+    routing_mode  = "[cyan]Profile (calibrated)[/cyan]" if using_profile \
+                    else "[dim]Legacy heuristic[/dim]"
+
     gt = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
     gt.add_column("Label", style="dim", width=22)
-    gt.add_column("Value", width=50)
-    gt.add_row("Simplicity score",  f"[bold]{gate_conf:.2f}[/bold]  (>= {gate_threshold} = local)" if has_local else f"[bold]{gate_conf:.2f}[/bold]")
-    gt.add_row("Decision",          gate_reason)
-    gt.add_row("Local model",       f"[cyan]{active_model or 'None'}[/cyan]")
-    gt.add_row("Model cal acc",     f"{model_acc*100:.1f}%" if has_local else "n/a")
-    gt.add_row("Gate latency",      f"{gms:.2f}ms (feat extract: {fms:.1f}ms)")
+    gt.add_column("Value", width=60)
+    gt.add_row("Routing mode",    routing_mode)
+    gt.add_row("Decision",        gate_reason)
+    gt.add_row("Confidence",      f"[bold]{gate_conf:.2f}[/bold]")
+    gt.add_row("Local model",     f"[cyan]{active_model or 'None'}[/cyan]")
+    if using_profile and capability_profile:
+        gt.add_row("Profile summary", f"[dim]{capability_profile.summary()}[/dim]")
+    else:
+        gt.add_row("Model cal acc",   f"{model_acc*100:.1f}%" if has_local else "n/a")
+    gt.add_row("Gate latency",    f"{gms:.2f}ms (feat extract: {fms:.1f}ms)")
     CONSOLE.print(gt)
 
     dest         = "local"
