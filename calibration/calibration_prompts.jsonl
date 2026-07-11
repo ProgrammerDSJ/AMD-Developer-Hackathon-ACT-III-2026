@@ -114,3 +114,15 @@
 {"prompt_id": "ifeval_002", "source": "ifeval", "difficulty": "L2", "prompt": "List 3 synonyms for the word 'happy'.", "reference": "joyful", "evaluator": "mcq_keyword"}
 {"prompt_id": "ifeval_003", "source": "ifeval", "difficulty": "L3", "prompt": "Summarize the following in exactly one sentence:\n'The Apollo 11 mission, launched in July 1969, successfully landed humans on the Moon for the first time, with Neil Armstrong and Buzz Aldrin walking on the lunar surface while Michael Collins orbited above.'", "reference": "Apollo 11", "evaluator": "mcq_keyword"}
 {"prompt_id": "ifeval_004", "source": "ifeval", "difficulty": "L3", "prompt": "Convert the following JSON to a Python dataclass:\n{\"name\": \"Alice\", \"age\": 30, \"scores\": [95, 87, 92]}", "reference": "dataclass", "evaluator": "code"}
+{"prompt_id": "math_l1_001", "source": "math_l1", "difficulty": "L1", "prompt": "What is 15 + 27?", "reference": "42", "evaluator": "math"}
+{"prompt_id": "math_l1_002", "source": "math_l1", "difficulty": "L1", "prompt": "What is 8 times 9?", "reference": "72", "evaluator": "math"}
+{"prompt_id": "math_l1_003", "source": "math_l1", "difficulty": "L1", "prompt": "What is 144 divided by 12?", "reference": "12", "evaluator": "math"}
+{"prompt_id": "math_l1_004", "source": "math_l1", "difficulty": "L1", "prompt": "What is 20% of 80?", "reference": "16", "evaluator": "math"}
+{"prompt_id": "math_l1_005", "source": "math_l1", "difficulty": "L1", "prompt": "What is the square root of 64?", "reference": "8", "evaluator": "math"}
+{"prompt_id": "math_l1_006", "source": "math_l1", "difficulty": "L1", "prompt": "Solve for x: x + 5 = 12", "reference": "7", "evaluator": "math"}
+{"prompt_id": "math_l1_007", "source": "math_l1", "difficulty": "L1", "prompt": "Solve for x: 3x = 21", "reference": "7", "evaluator": "math"}
+{"prompt_id": "math_l1_008", "source": "math_l1", "difficulty": "L1", "prompt": "Solve for x: 5x - 10 = 15", "reference": "5", "evaluator": "math"}
+{"prompt_id": "math_l1_009", "source": "math_l1", "difficulty": "L1", "prompt": "Solve for x: 2x + 3 = 11", "reference": "4", "evaluator": "math"}
+{"prompt_id": "math_l1_010", "source": "math_l1", "difficulty": "L1", "prompt": "If a = 4 and b = 7, what is a + b?", "reference": "11", "evaluator": "math"}
+{"prompt_id": "math_l1_011", "source": "math_l1", "difficulty": "L1", "prompt": "What is (12 + 8) * 3?", "reference": "60", "evaluator": "math"}
+{"prompt_id": "math_l1_012", "source": "math_l1", "difficulty": "L1", "prompt": "What is 100 - 37?", "reference": "63", "evaluator": "math"}

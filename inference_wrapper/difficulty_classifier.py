@@ -241,10 +241,14 @@ def classify(prompt: str, feats: Dict[str, Any] = None) -> DifficultyResult:
         if re.search(r"\boptimiz|\bO\(|\bcomplexity\b|\block.free|\bconcurrent\b", lower):
             difficulty_score = max(difficulty_score, 2.8)   # L4 systems tasks
     if domain == "math":
-        # Math starts at L2
-        difficulty_score = max(difficulty_score, 0.5)
+        # Only apply L2 floor for longer, multi-step math (n > 10).
+        # Short prompts (simple algebra, basic arithmetic) should land at L1.
+        if n > 10:
+            difficulty_score = max(difficulty_score, 0.5)
+
+        # L4 floor: proof/theorem/integral level math
         if re.search(r"\bproof\b|\btheorem\b|\bderive\b|\birrational\b|\bintegral\b", lower):
-            difficulty_score = max(difficulty_score, 2.8)   # L4 proof tasks
+            difficulty_score = max(difficulty_score, 2.8)
     if domain == "reasoning":
         difficulty_score = max(difficulty_score, 1.0)   # reasoning starts at L2/L3
 
@@ -253,8 +257,12 @@ def classify(prompt: str, feats: Dict[str, Any] = None) -> DifficultyResult:
         difficulty_score = max(difficulty_score, 0.5)
         difficulty_score = min(difficulty_score, 1.8)  # MCQs don't hit L4
 
-    # Map score → level
-    if   difficulty_score < 0:   level = "L1"
+    # Map score -> level
+    # L1 < 0.5  (very short / trivial: quick arithmetic, single-step algebra)
+    # L2 < 1.2  (moderate: multi-step, structured problem)
+    # L3 < 2.4  (hard: reasoning chains, multi-hop, harder proofs)
+    # L4 >= 2.4 (frontier: competition math, complex systems code, etc.)
+    if   difficulty_score < 0.5: level = "L1"
     elif difficulty_score < 1.2: level = "L2"
     elif difficulty_score < 2.4: level = "L3"
     else:                        level = "L4"

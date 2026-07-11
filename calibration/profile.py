@@ -43,6 +43,7 @@ SOURCE_TO_DOMAIN: Dict[str, str] = {
     "humaneval":  "code",
     "truthfulqa": "language",
     "math_hard":  "math",
+    "math_l1":    "math",
     "leetcode":   "code",
     "musique":    "reasoning",
     "hotpotqa":   "reasoning",

@@ -52,17 +52,138 @@ def acc_to_threshold(acc: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Per-(evaluator, difficulty) calibration config
+# System prompts constrain output format so extractors are reliable.
+# Max tokens are sized to the expected response length.
+# ---------------------------------------------------------------------------
+CALIBRATION_CONFIG = {
+    # ── MCQ (just the letter for L1/L2; anchor marker for L3/L4) ──────────
+    ("mcq", "L1"): {
+        "system":     "Answer with ONLY the single letter A, B, C, or D. Nothing else.",
+        "max_tokens": 8,
+    },
+    ("mcq", "L2"): {
+        "system":     "Answer with ONLY the single letter A, B, C, or D. Nothing else.",
+        "max_tokens": 8,
+    },
+    ("mcq", "L3"): {
+        "system":     (
+            "Think briefly about the question, then end your response with exactly:\n"
+            "Answer: X\n"
+            "where X is the single correct letter (A, B, C, or D)."
+        ),
+        "max_tokens": 150,
+    },
+    ("mcq", "L4"): {
+        "system":     (
+            "Reason step by step, then end your response with exactly:\n"
+            "Answer: X\n"
+            "where X is the single correct letter (A, B, C, or D)."
+        ),
+        "max_tokens": 300,
+    },
+    # ── Math (bare number for L1/L2; anchor marker for L3/L4) ─────────────
+    ("math", "L1"): {
+        "system":     "Output ONLY the final number. No units, no work, no explanation.",
+        "max_tokens": 16,
+    },
+    ("math", "L2"): {
+        "system":     "Output ONLY the final number. No units, no work, no explanation.",
+        "max_tokens": 32,
+    },
+    ("math", "L3"): {
+        "system":     (
+            "Solve step by step. End your response with exactly:\n"
+            "Answer: [number]\n"
+            "where [number] is the final numerical answer only."
+        ),
+        "max_tokens": 300,
+    },
+    ("math", "L4"): {
+        "system":     (
+            "Show all reasoning steps clearly. End your response with exactly:\n"
+            "Answer: [number]\n"
+            "where [number] is the final numerical answer only."
+        ),
+        "max_tokens": 512,
+    },
+    # ── Code ───────────────────────────────────────────────────────────────
+    ("code", "L1"): {
+        "system":     (
+            "Provide a complete, working Python function. "
+            "Include the def line and all necessary logic. No prose outside the code."
+        ),
+        "max_tokens": 256,
+    },
+    ("code", "L2"): {
+        "system":     (
+            "Provide a complete, working Python function. "
+            "Include the def line and all necessary logic. No prose outside the code."
+        ),
+        "max_tokens": 384,
+    },
+    ("code", "L3"): {
+        "system":     (
+            "Provide a complete, working Python function implementation. "
+            "Include the def line, all logic, and handle edge cases."
+        ),
+        "max_tokens": 512,
+    },
+    ("code", "L4"): {
+        "system":     (
+            "Think through your approach briefly, then provide a complete, "
+            "working function implementation with the def line."
+        ),
+        "max_tokens": 512,
+    },
+    # ── MCQ keyword (short factual answers) ───────────────────────────────
+    ("mcq_keyword", "L1"): {
+        "system":     "Answer directly and factually in 1-2 sentences. Be concise.",
+        "max_tokens": 64,
+    },
+    ("mcq_keyword", "L2"): {
+        "system":     "Answer directly and factually in 2-3 sentences.",
+        "max_tokens": 96,
+    },
+    ("mcq_keyword", "L3"): {
+        "system":     "Answer accurately with relevant context. 3-4 sentences.",
+        "max_tokens": 128,
+    },
+    ("mcq_keyword", "L4"): {
+        "system":     "Answer thoughtfully with necessary context. 4-5 sentences.",
+        "max_tokens": 192,
+    },
+}
+
+# Fallback for any (evaluator, level) combination not in the table
+CALIBRATION_DEFAULT = {
+    "system":     "Answer concisely and accurately.",
+    "max_tokens": 128,
+}
+
+
+# ---------------------------------------------------------------------------
 # Deterministic scorers (no Fireworks tokens)
 # ---------------------------------------------------------------------------
 def _extract_letter(text: str) -> str:
     """
     Smart MCQ answer extractor — handles verbose/step-by-step responses.
     Priority order:
+      0. [NEW] Explicit 'Answer: X' anchor injected by our system prompt
       1. Explicit answer markers: 'answer is D', 'answer: D', 'correct answer is D'
       2. Last standalone letter in the final 250 chars (the conclusion)
       3. First standalone letter in first 300 chars (fallback)
     """
     t = text.strip()
+
+    # Priority 0: our system-prompt anchor 'Answer: X' on its own line
+    # This is the most reliable signal for L3/L4 reasoning-chain responses.
+    anchor = re.search(
+        r"(?:^|\n)\s*Answer:\s*\**([A-D])\b",
+        t, re.IGNORECASE | re.MULTILINE
+    )
+    if anchor:
+        return anchor.group(1).upper()
 
     # Priority 1: explicit answer/conclusion markers
     explicit = [
@@ -92,17 +213,34 @@ def _extract_letter(text: str) -> str:
 def _extract_number(text: str) -> str:
     """
     Extract the final numerical answer from math responses.
-    Looks for 'answer is X', '= X', or just the last number.
+    Priority order:
+      0. [NEW] Explicit 'Answer: X' anchor injected by our system prompt
+      1. Last '=' result (most reliable for step-by-step math)
+      2. Explicit answer markers
+      3. Last number in response tail
     """
     # Remove thousands commas and currency
     clean = text.replace(",", "").replace("$", "").replace("\u00a0", " ")
+
+    # Priority 0: our system-prompt anchor 'Answer: [number]'
+    # This is the most reliable signal for L3/L4 with reasoning chains.
+    anchor = re.search(
+        r"(?:^|\n)\s*Answer:\s*(-?\d+(?:[./]\d+)?)",
+        clean, re.IGNORECASE | re.MULTILINE
+    )
+    if anchor:
+        val = anchor.group(1)
+        # Handle simple fractions like 105/512
+        if "/" in val:
+            return val  # return as-is; comparator handles fraction strings
+        return val
 
     # Priority 1: last '=' result (most reliable for step-by-step math)
     eq_matches = list(re.finditer(r"=\s*(-?\d+(?:\.\d+)?)", clean[-600:]))
     if eq_matches:
         return eq_matches[-1].group(1)
 
-    # Priority 2: explicit answer markers (not 'total:' which is a label)
+    # Priority 2: explicit answer markers
     m = re.search(
         r"(?:the\s+)?(?:answer|result|equals?)\s*(?:is)?[\s:=]+(-?\d+(?:\.\d+)?)",
         clean[-600:], re.IGNORECASE
@@ -182,7 +320,16 @@ def calibrate_model(model_name: str, prompts: list) -> dict:
             difficulty = p.get("difficulty", "L2")   # default L2 for old prompts
             domain     = SOURCE_TO_DOMAIN.get(src, "factual")
 
-            resp, _ = generate(p["prompt"], model_name, max_tokens=128)
+            # Get format-constraining system prompt + token budget for this probe
+            evaluator  = p["evaluator"]
+            cal_cfg    = CALIBRATION_CONFIG.get(
+                (evaluator, difficulty), CALIBRATION_DEFAULT
+            )
+            resp, _ = generate(
+                p["prompt"], model_name,
+                max_tokens=cal_cfg["max_tokens"],
+                system=cal_cfg["system"],
+            )
             ok = bool(_score(resp, p["reference"], p["evaluator"]))
             if ok:
                 correct += 1

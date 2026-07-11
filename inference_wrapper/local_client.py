@@ -50,15 +50,36 @@ def best_model(models: List[Dict]) -> Optional[Dict]:
     return max(models, key=lambda m: score_model(m["name"]))
 
 
-def generate(prompt: str, model_name: str, max_tokens: int = 512) -> Tuple[str, float]:
-    """Returns (response_text, latency_s). Uses 0 Fireworks tokens."""
+def generate(
+    prompt: str,
+    model_name: str,
+    max_tokens: int = 512,
+    system: str = "",
+) -> Tuple[str, float]:
+    """
+    Returns (response_text, latency_s). Uses 0 Fireworks tokens.
+
+    Args:
+        prompt:     User prompt text.
+        model_name: Ollama model name.
+        max_tokens: Maximum tokens to generate (num_predict).
+        system:     Optional system prompt. When non-empty, instructs the model
+                    on output format (e.g. during calibration).
+    """
     t0 = time.time()
+    body: Dict = {
+        "model":   model_name,
+        "prompt":  prompt,
+        "stream":  False,
+        "options": {"num_predict": max_tokens},
+    }
+    if system:
+        body["system"] = system
     try:
         r = requests.post(
             f"{OLLAMA_BASE}/api/generate",
-            json={"model": model_name, "prompt": prompt,
-                  "stream": False, "options": {"num_predict": max_tokens}},
-            timeout=90,
+            json=body,
+            timeout=120,   # bumped from 90 → 120 for L4 reasoning chains
         )
         elapsed = time.time() - t0
         return (r.json().get("response", "").strip(), elapsed) if r.status_code == 200 \
